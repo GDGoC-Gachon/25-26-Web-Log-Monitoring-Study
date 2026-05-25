@@ -6,7 +6,8 @@
   },
   "scripts": {
     "dev": "tsx src/app.ts",
-    "start": "node dist/app.js"
+    "start": "node dist/app.js",
+    "test": "tsx --test src/**/*.test.ts"
   },
   "devDependencies": {
     "@types/node": "^25.9.1",

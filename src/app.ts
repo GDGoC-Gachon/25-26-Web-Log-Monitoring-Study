@@ -17,4 +17,4 @@ setInterval(async () => {
     await serverErrorJob();
     await webErrorJob();
     await mailNotification();
-}, jobsPollingMinutes);
+}, jobsPollingMinutes * 60 * 1000);
