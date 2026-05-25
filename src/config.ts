@@ -26,8 +26,8 @@ export const config = {
         get ddosRequestsPerIp() {
             return Number(process.env.DDOS_REQUESTS_PER_IP ?? 300);
         },
-        get serverErrorCount() {
-            return Number(process.env.SERVER_ERROR_COUNT ?? 50);
+        get serverErrorRatePercent() {
+            return Number(process.env.SERVER_ERROR_RATE_PERCENT ?? 5);
         },
         get sensitivePaths() {
             return process.env.SENSITIVE_PATHS ?? '/.env,/admin';

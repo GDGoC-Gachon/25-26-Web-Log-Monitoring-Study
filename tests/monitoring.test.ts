@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { buildElasticsearchClientOptions } from '../src/utils/elastic.client.ts';
 import { buildEsqlQueryRequest, buildRecentIisLogsEsqlQuery } from '../src/utils/elastic-query.client.ts';
-import { buildServerErrorEsqlQuery, serverErrorJob } from '../src/jobs/server-error.job/job.ts';
+import { buildServerErrorEsqlQuery, extractApiDomain, serverErrorJob } from '../src/jobs/server-error.job/job.ts';
 import { logger } from '../src/utils/logger.ts';
 
 test('buildElasticsearchClientOptions builds external API client options with optional basic auth', () => {
@@ -63,17 +63,24 @@ test('logger exposes an ECS-aware pino logger', () => {
     assert.equal(typeof logger.info, 'function');
 });
 
-test('buildServerErrorEsqlQuery counts recent HTTP 5xx responses by status', () => {
+test('buildServerErrorEsqlQuery fetches recent API requests for rate-based server error detection', () => {
     const query = buildServerErrorEsqlQuery(10);
 
     assert.match(query, /FROM iis-\*/);
     assert.match(query, /@timestamp > NOW\(\) - 10m/);
-    assert.match(query, /sc_status >= 500/);
-    assert.match(query, /sc_status < 600/);
-    assert.match(query, /STATS error_count = COUNT\(\*\) BY sc_status/);
+    assert.match(query, /cs_uri_stem LIKE "\/api\/v1\/%"/);
+    assert.match(query, /cs_uri_stem LIKE "\/api\/%"/);
+    assert.match(query, /KEEP @timestamp, cs_uri_stem, sc_status/);
 });
 
-test('serverErrorJob reports a detection when total 5xx responses meet the threshold', async () => {
+test('extractApiDomain groups supported API path shapes by domain', () => {
+    assert.equal(extractApiDomain('/api/v1/users/profile'), 'users');
+    assert.equal(extractApiDomain('/api/orders'), 'orders');
+    assert.equal(extractApiDomain('api/v1/payments/approve'), 'payments');
+    assert.equal(extractApiDomain('/web/login'), undefined);
+});
+
+test('serverErrorJob reports detections by API domain when 5xx rate meets the threshold', async () => {
     const requests: unknown[] = [];
     const warnings: unknown[] = [];
     const client = {
@@ -83,12 +90,17 @@ test('serverErrorJob reports a detection when total 5xx responses meet the thres
 
                 return {
                     columns: [
-                        { name: 'sc_status' },
-                        { name: 'error_count' }
+                        { name: 'cs_uri_stem' },
+                        { name: 'sc_status' }
                     ],
                     values: [
-                        [500, 4],
-                        [503, 3]
+                        ['/api/v1/orders/list', 200],
+                        ['/api/v1/orders/list', 500],
+                        ['/api/v1/orders/detail', 503],
+                        ['/api/v1/users/me', 200],
+                        ['/api/v1/users/me', 200],
+                        ['/api/users', 500],
+                        ['/web/login', 500]
                     ]
                 };
             }
@@ -97,7 +109,7 @@ test('serverErrorJob reports a detection when total 5xx responses meet the thres
 
     const finding = await serverErrorJob({
         client,
-        threshold: 7,
+        errorRateThresholdPercent: 50,
         windowMinutes: 5,
         logger: {
             warn(details: unknown) {
@@ -107,10 +119,19 @@ test('serverErrorJob reports a detection when total 5xx responses meet the thres
     });
 
     assert.equal(finding.detected, true);
-    assert.equal(finding.errorCount, 7);
-    assert.deepEqual(finding.statusBreakdown, [
-        { status: 500, count: 4 },
-        { status: 503, count: 3 }
+    assert.deepEqual(finding.domainFindings, [
+        {
+            domain: 'orders',
+            totalRequests: 3,
+            errorCount: 2,
+            errorRatePercent: 66.67
+        },
+        {
+            domain: 'users',
+            totalRequests: 3,
+            errorCount: 1,
+            errorRatePercent: 33.33
+        }
     ]);
     assert.equal(requests.length, 1);
     assert.equal(warnings.length, 1);
