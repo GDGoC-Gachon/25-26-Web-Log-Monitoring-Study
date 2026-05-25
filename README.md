@@ -40,8 +40,22 @@ src/
 
 `.env.example`을 복사하여 `.env`를 생성하고 값을 채웁니다.
 
+macOS/Linux:
+
 ```bash
 cp .env.example .env
+```
+
+Windows CMD:
+
+```cmd
+copy .env.example .env
+```
+
+Windows PowerShell:
+
+```powershell
+Copy-Item .env.example .env
 ```
 
 | 변수 | 설명 |
@@ -67,21 +81,48 @@ Kibana는 `http://localhost:5601`에서 확인합니다. Logstash는 `docker/log
 
 ### 설치 및 실행
 
+이 프로젝트는 현재 빌드 산출물을 생성하지 않고 `tsx`로 `src/app.ts`를 직접 실행합니다. `tsconfig.json`의 `noEmit: true` 설정 때문에 `dist/app.js`는 생성되지 않습니다.
+
 ```bash
 # 의존성 설치
 npm install
 
-# 개발 서버 실행 (tsx 사용, 빌드 불필요)
+# 공통 개발 실행
 npm run dev
 
 # 타입 체크
-npx tsc --noEmit
+npm run check
+```
+
+macOS/Linux 전용 실행:
+
+```bash
+npm run dev:unix
+```
+
+또는:
+
+```bash
+./scripts/dev.sh
+```
+
+Windows 전용 실행:
+
+```cmd
+npm run dev:win
+```
+
+또는:
+
+```cmd
+scripts\dev.cmd
 ```
 
 ## 주요 규칙
 
 - ESM 전용 프로젝트 (`"type": "module"`); import 경로에 `.ts` 확장자 사용
 - `tsconfig.json`의 `noEmit: true` — `tsx`로 직접 실행, 컴파일 아웃풋 불사용
+- `start`는 현재 빌드 정책에 맞춰 `tsx src/app.ts` 기반 공통 실행 진입점으로 연결
 - TypeScript 엄격 모드: `strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes` 활성화
 - 잡은 실패해도 예외를 throw하지 않고 빈 배열 반환
 

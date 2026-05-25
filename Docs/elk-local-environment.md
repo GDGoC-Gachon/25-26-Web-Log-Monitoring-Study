@@ -23,6 +23,37 @@ curl -fsS "http://localhost:9200/iis-*/_search?size=3"
 
 Kibana는 `http://localhost:5601`에서 접속한다. Discover에서 `iis-*` data view를 생성하면 Logstash가 적재한 샘플 로그를 확인할 수 있다.
 
+## Kibana Fleet / Integrations 콘솔 로그
+
+현재 로컬 Compose 구성은 IIS 로그를 Logstash로 적재하고 Kibana Discover에서 `iis-*` 인덱스를 확인하는 범위까지를 목표로 한다. Fleet 또는 Integrations 기반 Agent 관리는 이번 로컬 환경의 필수 경로가 아니다.
+
+Kibana 화면에서 다음 계열의 로그가 보일 수 있다.
+
+```text
+/api/fleet/settings 403 Forbidden
+/api/fleet/agents/setup 403 Forbidden
+/api/fleet/epm/packages 403 Forbidden
+/api/fleet/epm/categories 403 Forbidden
+```
+
+원인은 로컬 Elasticsearch를 `xpack.security.enabled=false`로 실행하는 동안 Kibana 8.15.3의 Fleet / Integrations 플러그인이 보안 기능을 전제로 한 내부 API를 호출하기 때문이다. `/api/fleet/settings` 응답 본문은 다음 형태다.
+
+```json
+{"statusCode":403,"error":"Forbidden","message":"Kibana security must be enabled to use Fleet"}
+```
+
+Compose의 Kibana 서비스는 프로젝트 범위 밖인 Agent 관리 호출을 줄이기 위해 `XPACK_FLEET_AGENTS_ENABLED=false`를 설정한다. 다만 Kibana 8.15.3에서는 Fleet 플러그인 자체가 계속 로드되므로 `/api/fleet/settings`, `/api/fleet/epm/*` 403을 모두 제거하려면 Elasticsearch/Kibana 보안을 활성화하고 Fleet 권한까지 구성해야 한다. 현재 로컬 환경은 no-auth Discover 검증을 우선하므로 그 경로는 사용하지 않는다.
+
+로컬 검증에서는 아래 항목이 정상인지 우선 확인한다.
+
+```bash
+curl -fsS http://localhost:9200/_cluster/health
+curl -fsS "http://localhost:9200/iis-*/_search?size=3"
+curl -fsS http://localhost:5601/api/status
+```
+
+위 확인이 통과하고 Discover에서 `iis-*` data view가 조회되면, `/api/fleet/* 403`은 현재 프로젝트의 IIS 로그 수집 경로를 막는 오류가 아니다. Fleet 또는 Integrations 기능을 별도로 사용할 때만 Kibana Role에서 Fleet / Integrations 권한과 Elasticsearch API key 관련 권한을 설계한다.
+
 ## 앱 환경변수
 
 로컬 ELK를 사용할 때:

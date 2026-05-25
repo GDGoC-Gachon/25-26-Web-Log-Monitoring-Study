@@ -5,8 +5,12 @@
     "dotenv": "^17.4.2"
   },
   "scripts": {
-    "dev": "tsx src/app.ts",
-    "start": "node dist/app.js"
+    "dev": "npm run dev:app",
+    "dev:app": "tsx src/app.ts",
+    "dev:unix": "sh ./scripts/dev.sh",
+    "dev:win": "scripts\\dev.cmd",
+    "check": "tsc --noEmit",
+    "start": "npm run dev:app"
   },
   "devDependencies": {
     "@types/node": "^25.9.1",

@@ -24,6 +24,8 @@ services:
         condition: service_healthy
     environment:
       ELASTICSEARCH_HOSTS: http://elasticsearch:9200
+      XPACK_FLEET_AGENTS_ENABLED: "false"
+      XPACK_FLEET_ENABLEMANAGEDLOGSANDMETRICSDATAVIEWS: "false"
     ports:
       - "127.0.0.1:5601:5601"
     healthcheck:
