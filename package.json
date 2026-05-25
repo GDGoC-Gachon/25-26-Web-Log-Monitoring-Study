@@ -3,16 +3,13 @@
   "dependencies": {
     "@elastic/ecs-pino-format": "^1.5.0",
     "@elastic/elasticsearch": "^9.4.1",
-    "axios": "^1.16.1",
     "dotenv": "^17.4.2",
     "pino": "^10.3.1"
   },
   "scripts": {
     "dev": "npm run dev:app",
     "dev:app": "tsx src/app.ts",
-    "dev:unix": "sh ./scripts/dev.sh",
     "dev:win": "scripts\\dev.cmd",
-    "setup:dev": "tsx src/setup/development-environment.setup.ts",
     "test": "node --import tsx --test \"tests/**/*.test.ts\"",
     "check": "tsc --noEmit",
     "start": "npm run dev:app"
