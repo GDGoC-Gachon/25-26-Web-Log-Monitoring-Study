@@ -2,6 +2,8 @@
 
 `src/jobs` 도메인별 요구사항 상태를 추적하는 대시보드입니다. 상세 요구사항 설명은 각 도메인 문서를 기준으로 관리합니다.
 
+목표 시스템 다이어그램과 구현해야 할 코드 단위는 [monitoring-system-development-guide.md](monitoring-system-development-guide.md)를 기준으로 확인합니다.
+
 ## 상태 기준
 
 | 상태 | 의미 |
@@ -39,6 +41,7 @@
 
 | 문서 | 역할 |
 | --- | --- |
+| [monitoring-system-development-guide.md](monitoring-system-development-guide.md) | 목표 시스템 다이어그램, 런타임 흐름, 구현해야 할 코드 단위와 개발 순서 |
 | [common-platform.md](requirements/common-platform.md) | 공통 실행 기반, 설정, API 연동, 품질, 2차 대응 자동화 요구사항 |
 | [brute-force.md](requirements/brute-force.md) | 무차별 대입 공격 탐지 요구사항 |
 | [ddos.md](requirements/ddos.md) | DDoS 공격 탐지 요구사항 |

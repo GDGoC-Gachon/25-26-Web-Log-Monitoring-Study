@@ -1,6 +1,5 @@
-import axios from 'axios';
-import { config } from '../config.ts';
-import { buildBasicAuthConfig } from '../utils/http-auth.ts';
+import { elasticClient } from '../utils/elastic.client.ts';
+import { logger } from '../utils/logger.ts';
 
 type FieldMapping = {
     type: string;
@@ -79,24 +78,21 @@ export function buildIisIndexTemplate(): IisIndexTemplate {
 
 export async function ensureIisIndexTemplate() {
     const template = buildIisIndexTemplate();
-    const elasticsearchUrl = config.elasticsearch.url.replace(/\/$/, '');
-    const authConfig = buildBasicAuthConfig(
-        'ELASTICSEARCH',
-        config.elasticsearch.username,
-        config.elasticsearch.password
-    );
 
-    await axios.put(
-        `${elasticsearchUrl}/_index_template/${template.name}`,
-        template.body,
+    await elasticClient.transport.request({
+        method: 'PUT',
+        path: `/_index_template/${template.name}`,
+        body: template.body
+    });
+
+    logger.info(
         {
-            headers: {
-                'Content-Type': 'application/json'
+            event: {
+                action: 'iis-index-template-ready'
             },
-            ...authConfig,
-            timeout: config.elasticsearch.requestTimeoutMs
+            elasticsearch: {
+                index_template: template.name
+            }
         }
     );
-
-    console.log(`[setup] Elasticsearch index template '${template.name}' is ready`);
 }

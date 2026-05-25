@@ -1,46 +1,56 @@
-import path from 'path';
-import { fileURLToPath } from 'url';
-import axios from 'axios';
-import { config } from '../config.ts';
+import type { TransportRequestParams } from '@elastic/transport';
+import { elasticClient } from './elastic.client.ts';
+import { logger } from './logger.ts';
 
 export async function elasticQueryClient(minutes: number) {
-    const username = config.elasticsearch.username;
-    const password = config.elasticsearch.password;
-    const elasticsearchUrl = config.elasticsearch.url.replace(/\/$/, '');
-
-    if ((username && !password) || (!username && password)) {
-        throw new Error('ELASTIC_USERNAME and ELASTIC_PASSWORD must be configured together');
-    }
-
     try {
-        const response = await axios.post(
-            `${elasticsearchUrl}/_query`,
-            {
-                query: `FROM iis-* | WHERE @timestamp > NOW() - ${minutes}m | DROP *.keyword | SORT @timestamp DESC`
-            },
-            {
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                ...(username && password ? { auth: { username, password } } : {}),
-                timeout: config.elasticsearch.requestTimeoutMs
-            }
-        );
+        const response = await elasticClient.transport.request(buildRecentIisLogsQueryRequest(minutes));
 
-        if (response.status === 200) {
-            return response.data.values;
-        }
-        else {
-            throw new Error(`API Request Failed with status code ${response.status}`);
-        }
+        return isEsqlValuesResponse(response) ? response.values : [];
     }
     catch (error) {
-        const now = new Date();
-        const fileName = path.basename(fileURLToPath(import.meta.url));
         const errorMessage = error instanceof Error ? error.message : String(error);
 
-        console.log(`[${now.toISOString()}] [${fileName}] [ERROR] - ${errorMessage}`);
+        logger.error(
+            {
+                event: {
+                    action: 'iis-esql-query-failed'
+                },
+                error: {
+                    message: errorMessage
+                }
+            },
+            'IIS ES|QL query failed'
+        );
 
         return [];
     }
+}
+
+export function buildRecentIisLogsEsqlQuery(minutes: number) {
+    return [
+        'FROM iis-*',
+        `| WHERE @timestamp > NOW() - ${minutes}m`,
+        '| KEEP @timestamp, c_ip, cs_method, cs_uri_stem, sc_status, time_taken, cs_user_agent',
+        '| SORT @timestamp DESC'
+    ].join(' ');
+}
+
+export function buildRecentIisLogsQueryRequest(minutes: number): TransportRequestParams {
+    return {
+        method: 'POST',
+        path: '/_query',
+        querystring: {
+            format: 'json'
+        },
+        body: {
+            query: buildRecentIisLogsEsqlQuery(minutes)
+        }
+    };
+}
+
+function isEsqlValuesResponse(response: unknown): response is { values: unknown[] } {
+    return typeof response === 'object'
+        && response !== null
+        && Array.isArray((response as { values?: unknown }).values);
 }

@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { config } from '../config.ts';
 import { buildBasicAuthConfig } from '../utils/http-auth.ts';
+import { logger } from '../utils/logger.ts';
 
 type KibanaDataViewBody = {
     data_view: {
@@ -68,5 +69,15 @@ export async function ensureIisDataView() {
         requestConfig
     );
 
-    console.log(`[setup] Kibana data view '${dataView.id}' is ready and set as default`);
+    logger.info(
+        {
+            event: {
+                action: 'iis-kibana-data-view-ready'
+            },
+            kibana: {
+                data_view: dataView.id
+            }
+        },
+        'Kibana IIS data view is ready and set as default'
+    );
 }

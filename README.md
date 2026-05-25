@@ -8,7 +8,9 @@ IIS 웹 서버 로그를 Elasticsearch API로 폴링하여 이상 징후 감지 
 |------|------|
 | 런타임 | Node.js + TypeScript (ESM) |
 | 로그 소스 | IIS 웹 서버 (`iis-*` 인덱스) |
-| 쿼리 엔진 | Elasticsearch ES\|QL |
+| Elasticsearch 연동 | `@elastic/elasticsearch` 공식 Node.js 클라이언트 |
+| 쿼리 엔진 | Elasticsearch ES\|QL (`POST /_query`) |
+| 앱 로그 | `pino` + `@elastic/ecs-pino-format` 기반 ECS JSON 로그 |
 | 로컬 관측 환경 | Docker Compose 기반 Elasticsearch + Kibana + Logstash |
 | 알림 수단 | Resend (이메일) |
 | 폴링 주기 | 1분 (`config.jobsPollingMinutes`) |
@@ -30,13 +32,16 @@ src/
 │   ├── web-error.job/job.ts       # 4xx 웹 오류 모니터링
 │   └── mail-notification.job/job.ts # Resend를 통한 이메일 알림 전송
 └── utils/
-    ├── elastic-query.client.ts    # ES|QL로 로그 조회
-    └── elastic-user.client.ts     # Elasticsearch 사용자 목록 조회
+    ├── elastic.client.ts          # 공식 Elasticsearch 클라이언트 생성
+    ├── elastic-query.client.ts    # ES|QL _query API로 IIS 로그 조회
+    ├── elastic-user.client.ts     # Elasticsearch 사용자 목록 조회
+    ├── http-auth.ts               # Kibana axios 호출용 Basic Auth 설정
+    └── logger.ts                  # ECS 형식 Pino logger
 ```
 
 **잡 패턴:** 각 잡은 `src/jobs/<name>.job/job.ts`에 위치하며, 단일 async 함수를 export합니다. 실패 시 빈 배열을 반환하고 예외를 throw하지 않습니다.
 
-**에러 로깅 형식:** `[ISO timestamp] [filename] [ERROR] - message`
+**로그 형식:** 앱 로그는 Elastic Common Schema(ECS) 호환 JSON으로 stdout에 출력합니다. Kibana Logs/Discover에서 `event.action`, `service.*`, `error.message` 같은 필드 기준 필터링을 전제로 합니다.
 
 ## 시작하기
 
@@ -73,6 +78,7 @@ Copy-Item .env.example .env
 | `KIBANA_USERNAME` | Kibana Basic Auth 사용자명. 로컬 Compose 환경에서는 비워둔다. |
 | `KIBANA_PASSWORD` | Kibana Basic Auth 비밀번호. 로컬 Compose 환경에서는 비워둔다. |
 | `JOBS_POLLING_MINUTES` | 잡 폴링 간격(분) |
+| `LOG_LEVEL` | Pino 로그 레벨. 기본값은 `info` |
 | `RESEND_TOKEN` | Resend API 이메일 발송 토큰 |
 
 ### 로컬 ELK 실행
@@ -90,6 +96,8 @@ Kibana는 `http://localhost:5601`에서 확인합니다. Logstash는 `docker/log
 
 상세 실행 절차와 reverse proxy 제외 범위는 [Docs/elk-local-environment.md](Docs/elk-local-environment.md)를 기준으로 관리합니다.
 
+목표 시스템 다이어그램, 런타임 흐름, 구현해야 할 코드 단위는 [Docs/monitoring-system-development-guide.md](Docs/monitoring-system-development-guide.md)를 기준으로 확인합니다.
+
 ### 설치 및 실행
 
 이 프로젝트는 현재 빌드 산출물을 생성하지 않고 `tsx`로 `src/app.ts`를 직접 실행합니다. `tsconfig.json`의 `noEmit: true` 설정 때문에 `dist/app.js`는 생성되지 않습니다.
@@ -106,6 +114,13 @@ npm run check
 
 # 단위 테스트
 npm test
+```
+
+현재 핵심 런타임 의존성은 다음과 같습니다.
+
+```bash
+npm install @elastic/elasticsearch dotenv
+npm install pino @elastic/ecs-pino-format
 ```
 
 macOS/Linux 전용 실행:
@@ -145,7 +160,7 @@ scripts\dev.cmd
 ```esql
 FROM iis-*
 | WHERE @timestamp > NOW() - 5m
-| DROP *.keyword
+| KEEP @timestamp, c_ip, cs_method, cs_uri_stem, sc_status, time_taken, cs_user_agent
 | SORT @timestamp DESC
 ```
 
