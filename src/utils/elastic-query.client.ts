@@ -1,34 +1,29 @@
 import path from 'path';
 import { fileURLToPath } from 'url';
 import axios from 'axios';
+import { config } from '../config.ts';
 
 export async function elasticQueryClient(minutes: number) {
-    const username = String(process.env.ELASTIC_USERNAME);
-    const password = String(process.env.ELASTIC_PASSWORD);
+    const username = config.elasticsearch.username;
+    const password = config.elasticsearch.password;
+    const elasticsearchUrl = config.elasticsearch.url.replace(/\/$/, '');
 
-    if (!username) {
-        throw new Error('ELASTIC_USERNAME is required but missing in .env');
-    }
-
-    if (!password) {
-        throw new Error('ELASTIC_PASSWORD is required but missing in .env');
+    if ((username && !password) || (!username && password)) {
+        throw new Error('ELASTIC_USERNAME and ELASTIC_PASSWORD must be configured together');
     }
 
     try {
         const response = await axios.post(
-            'https://api.gdgoc.net/_query',
+            `${elasticsearchUrl}/_query`,
             {
                 query: `FROM iis-* | WHERE @timestamp > NOW() - ${minutes}m | DROP *.keyword | SORT @timestamp DESC`
             },
             {
-                auth: {
-                    username: username,
-                    password: password
-                },
                 headers: {
                     'Content-Type': 'application/json'
                 },
-                timeout: 10000
+                ...(username && password ? { auth: { username, password } } : {}),
+                timeout: config.elasticsearch.requestTimeoutMs
             }
         );
 

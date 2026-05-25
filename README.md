@@ -9,6 +9,7 @@ IIS 웹 서버 로그를 Elasticsearch API로 폴링하여 이상 징후 감지 
 | 런타임 | Node.js + TypeScript (ESM) |
 | 로그 소스 | IIS 웹 서버 (`iis-*` 인덱스) |
 | 쿼리 엔진 | Elasticsearch ES\|QL |
+| 로컬 관측 환경 | Docker Compose 기반 Elasticsearch + Kibana + Logstash |
 | 알림 수단 | Resend (이메일) |
 | 폴링 주기 | 1분 (`config.jobsPollingMinutes`) |
 
@@ -45,9 +46,24 @@ cp .env.example .env
 
 | 변수 | 설명 |
 |------|------|
-| `ELASTIC_USERNAME` | Elasticsearch Basic Auth 사용자명 |
-| `ELASTIC_PASSWORD` | Elasticsearch Basic Auth 비밀번호 |
+| `ELASTICSEARCH_URL` | Elasticsearch 엔드포인트. 로컬 기본값은 `http://localhost:9200` |
+| `ELASTICSEARCH_TIMEOUT_MS` | Elasticsearch 요청 타임아웃(ms) |
+| `ELASTIC_USERNAME` | Elasticsearch Basic Auth 사용자명. 로컬 Compose 환경에서는 비워둔다. |
+| `ELASTIC_PASSWORD` | Elasticsearch Basic Auth 비밀번호. 로컬 Compose 환경에서는 비워둔다. |
+| `JOBS_POLLING_MINUTES` | 잡 폴링 간격(분) |
 | `RESEND_TOKEN` | Resend API 이메일 발송 토큰 |
+
+### 로컬 ELK 실행
+
+```bash
+docker compose up -d
+docker compose ps
+curl -fsS http://localhost:9200/_cluster/health
+```
+
+Kibana는 `http://localhost:5601`에서 확인합니다. Logstash는 `docker/logstash/sample-logs/iis-sample.log`를 읽어 `iis-*` 인덱스에 샘플 IIS 로그를 적재합니다.
+
+상세 실행 절차와 reverse proxy 제외 범위는 [Docs/elk-local-environment.md](Docs/elk-local-environment.md)를 기준으로 관리합니다.
 
 ### 설치 및 실행
 
