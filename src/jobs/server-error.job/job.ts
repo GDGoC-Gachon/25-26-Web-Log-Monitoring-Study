@@ -49,8 +49,8 @@ export function buildServerErrorEsqlQuery(minutes: number = config.detection.win
     return [
         `FROM ${config.elasticsearch.indexPattern}`,
         `| WHERE @timestamp > NOW() - ${minutes}m`,
-        '| WHERE cs_uri_stem LIKE "/api/v1/%" OR cs_uri_stem LIKE "/api/%"',
-        '| KEEP @timestamp, cs_uri_stem, sc_status',
+        '| WHERE path LIKE "/api/v1/%" OR path LIKE "/api/%"',
+        '| KEEP @timestamp, path, protocol_status',
         '| SORT @timestamp DESC'
     ].join(' ');
 }
@@ -78,8 +78,8 @@ export function extractApiDomain(path: string): string | undefined {
 
 function parseServerErrorLogRows(response: EsqlResponse): ServerErrorLogRow[] {
     const { columns, values } = normalizeEsqlResponse(response);
-    const pathIndex = columns.findIndex((column) => column.name === 'cs_uri_stem');
-    const statusIndex = columns.findIndex((column) => column.name === 'sc_status');
+    const pathIndex = columns.findIndex((column) => column.name === 'path');
+    const statusIndex = columns.findIndex((column) => column.name === 'protocol_status');
 
     if (pathIndex === -1 || statusIndex === -1) {
         return [];

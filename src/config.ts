@@ -1,3 +1,7 @@
+import dotenv from 'dotenv';
+
+dotenv.config();
+
 export const config = {
     get jobsPollingMinutes() {
         return Number(process.env.JOBS_POLLING_MINUTES ?? 1);
