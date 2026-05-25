@@ -15,5 +15,19 @@ export const config = {
         get requestTimeoutMs() {
             return Number(process.env.ELASTICSEARCH_TIMEOUT_MS ?? 10000);
         }
+    },
+    kibana: {
+        get url() {
+            return process.env.KIBANA_URL ?? 'http://localhost:5601';
+        },
+        get username() {
+            return process.env.KIBANA_USERNAME;
+        },
+        get password() {
+            return process.env.KIBANA_PASSWORD;
+        },
+        get requestTimeoutMs() {
+            return Number(process.env.KIBANA_TIMEOUT_MS ?? 10000);
+        }
     }
 };

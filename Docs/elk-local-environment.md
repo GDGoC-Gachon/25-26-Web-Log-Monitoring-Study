@@ -18,10 +18,17 @@
 docker compose up -d
 docker compose ps
 curl -fsS http://localhost:9200/_cluster/health
+npm run setup:dev
 curl -fsS "http://localhost:9200/iis-*/_search?size=3"
 ```
 
-Kibana는 `http://localhost:5601`에서 접속한다. Discover에서 `iis-*` data view를 생성하면 Logstash가 적재한 샘플 로그를 확인할 수 있다.
+Kibana는 `http://localhost:5601`에서 접속한다. `npm run setup:dev`는 다음 기본 개발환경 세팅을 TypeScript 코드로 수행한다.
+
+- Elasticsearch `iis-logs-template` index template 생성
+- Kibana `IIS Logs` data view 생성 (`iis-*`, time field `@timestamp`)
+- `IIS Logs` data view를 Kibana 기본 data view로 지정
+
+이후 Discover에서 Logstash가 적재한 샘플 로그를 바로 확인할 수 있다.
 
 ## Kibana Fleet / Integrations 콘솔 로그
 
@@ -62,6 +69,9 @@ curl -fsS http://localhost:5601/api/status
 ELASTICSEARCH_URL=http://localhost:9200
 ELASTIC_USERNAME=
 ELASTIC_PASSWORD=
+KIBANA_URL=http://localhost:5601
+KIBANA_USERNAME=
+KIBANA_PASSWORD=
 ```
 
 보안이 활성화된 원격 Elasticsearch를 사용할 때:
@@ -70,9 +80,13 @@ ELASTIC_PASSWORD=
 ELASTICSEARCH_URL=https://api.gdgoc.net
 ELASTIC_USERNAME=<username>
 ELASTIC_PASSWORD=<password>
+KIBANA_URL=<kibana-url>
+KIBANA_USERNAME=<username>
+KIBANA_PASSWORD=<password>
 ```
 
 `ELASTIC_USERNAME`과 `ELASTIC_PASSWORD`는 둘 다 비우거나 둘 다 설정해야 한다.
+`KIBANA_USERNAME`과 `KIBANA_PASSWORD`도 둘 다 비우거나 둘 다 설정해야 한다.
 
 ## 제외 범위
 

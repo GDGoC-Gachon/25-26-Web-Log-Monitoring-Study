@@ -9,6 +9,8 @@
     "dev:app": "tsx src/app.ts",
     "dev:unix": "sh ./scripts/dev.sh",
     "dev:win": "scripts\\dev.cmd",
+    "setup:dev": "tsx src/setup/development-environment.setup.ts",
+    "test": "node --import tsx --test \"tests/**/*.test.ts\"",
     "check": "tsc --noEmit",
     "start": "npm run dev:app"
   },
