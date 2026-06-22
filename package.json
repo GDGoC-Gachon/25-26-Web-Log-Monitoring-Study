@@ -10,7 +10,7 @@
     "dev": "npm run dev:app",
     "dev:app": "tsx src/app.ts",
     "dev:win": "scripts\\dev.cmd",
-    "test": "node --import tsx --test \"tests/**/*.test.ts\"",
+    "test": "node --import tsx --test \"tests/**/*.test.ts\" \"src/**/*.test.ts\"",
     "check": "tsc --noEmit",
     "start": "npm run dev:app"
   },

@@ -2,6 +2,17 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+function parseCsv(value: string | undefined, fallback: string[]): string[] {
+    const source = value ?? fallback.join(',');
+    return source.split(',').map((item) => item.trim()).filter(Boolean);
+}
+
+function parseNumberCsv(value: string | undefined, fallback: number[]): number[] {
+    return parseCsv(value, fallback.map(String))
+        .map((item) => Number(item))
+        .filter((item) => Number.isFinite(item));
+}
+
 export const config = {
     get jobsPollingMinutes() {
         return Number(process.env.JOBS_POLLING_MINUTES ?? 1);
@@ -29,6 +40,18 @@ export const config = {
         },
         get ddosRequestsPerIp() {
             return Number(process.env.DDOS_REQUESTS_PER_IP ?? 300);
+        },
+        get bruteForceMaxFailures() {
+            return Number(process.env.BRUTE_FORCE_MAX_FAILURES ?? 30);
+        },
+        get bruteForceTargetPaths() {
+            return parseCsv(process.env.BRUTE_FORCE_TARGET_PATHS, ['/login', '/auth', '/signin']);
+        },
+        get bruteForceStatusCodes() {
+            return parseNumberCsv(process.env.BRUTE_FORCE_STATUS_CODES, [400, 401, 403]);
+        },
+        get bruteForceExcludedIps() {
+            return parseCsv(process.env.BRUTE_FORCE_EXCLUDED_IPS, []);
         },
         get serverErrorRatePercent() {
             return Number(process.env.SERVER_ERROR_RATE_PERCENT ?? 5);
