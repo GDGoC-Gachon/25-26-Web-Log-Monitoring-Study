@@ -1,7 +1,8 @@
-import path from 'path';
-import { fileURLToPath } from 'url';
+import type { TransportRequestParams } from '@elastic/transport';
 import { config } from '../../config.ts';
-import { elasticQueryClient } from '../../utils/elastic-query.client.ts';
+import { elasticClient } from '../../utils/elastic.client.ts';
+import { buildEsqlQueryRequest } from '../../utils/elastic-query.client.ts';
+import { logger as defaultLogger } from '../../utils/logger.ts';
 import type { WebLog } from '../../types/web-log.ts';
 
 export interface BruteForceDetectionResult {
@@ -28,27 +29,106 @@ interface BruteForceGroup {
     count: number;
 }
 
-export async function bruteForceJob(): Promise<BruteForceDetectionResult[]> {
-    const bruteForceConfig = config.bruteForce;
+type EsqlColumn = {
+    name: string;
+};
 
-    try {
-        const logs = await elasticQueryClient(bruteForceConfig.windowMinutes);
-        const results = detectBruteForceAttempts(logs, bruteForceConfig);
+type EsqlResponse = {
+    columns?: EsqlColumn[];
+    values?: unknown[][];
+    body?: EsqlResponse;
+};
 
-        for (const result of results) {
-            logInfo(`detected brute force. client_ip=${result.clientIp} domain=${result.domain} count=${result.count} threshold=${result.threshold} window_minutes=${result.windowMinutes}`);
-        }
+type ElasticsearchLikeClient = {
+    transport: {
+        request(request: TransportRequestParams): Promise<EsqlResponse>;
+    };
+};
 
-        logInfo(`brute force detection completed. detected=${results.length}`);
+type BruteForceLogger = {
+    warn(details: unknown): void;
+};
 
-        return results;
-    }
-    catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        logError(errorMessage);
+type BruteForceJobOptions = {
+    client?: ElasticsearchLikeClient;
+    windowMinutes?: number;
+    failureThreshold?: number;
+    pathKeywords?: string[];
+    failureStatuses?: number[];
+    excludedIps?: string[];
+    logger?: BruteForceLogger;
+};
 
+export function buildBruteForceEsqlQuery(minutes: number = config.detection.windowMinutes): string {
+    return [
+        `FROM ${config.elasticsearch.indexPattern}`,
+        `| WHERE @timestamp > NOW() - ${minutes}m`,
+        '| KEEP @timestamp, client_ip, domain, path, protocol_status',
+        '| SORT @timestamp DESC'
+    ].join(' ');
+}
+
+function normalizeEsqlResponse(response: EsqlResponse): Required<Pick<EsqlResponse, 'columns' | 'values'>> {
+    const normalized = response.body ?? response;
+
+    return {
+        columns: normalized.columns ?? [],
+        values: normalized.values ?? []
+    };
+}
+
+function parseBruteForceLogRows(response: EsqlResponse): WebLog[] {
+    const { columns, values } = normalizeEsqlResponse(response);
+    const timestampIndex = columns.findIndex((column) => column.name === '@timestamp');
+    const clientIpIndex = columns.findIndex((column) => column.name === 'client_ip');
+    const domainIndex = columns.findIndex((column) => column.name === 'domain');
+    const pathIndex = columns.findIndex((column) => column.name === 'path');
+    const statusIndex = columns.findIndex((column) => column.name === 'protocol_status');
+
+    if (clientIpIndex === -1 || domainIndex === -1 || pathIndex === -1 || statusIndex === -1) {
         return [];
     }
+
+    return values
+        .map((row) => ({
+            timestamp: timestampIndex === -1 ? '' : String(row[timestampIndex]),
+            clientIp: String(row[clientIpIndex]),
+            domain: String(row[domainIndex]),
+            path: String(row[pathIndex]),
+            protocolStatus: Number(row[statusIndex])
+        }))
+        .filter((row) => row.clientIp.length > 0 && row.domain.length > 0 && row.path.length > 0 && Number.isFinite(row.protocolStatus));
+}
+
+export async function bruteForceJob({
+    client = elasticClient,
+    windowMinutes = config.detection.windowMinutes,
+    failureThreshold = config.detection.bruteForceMaxFailures,
+    pathKeywords = config.detection.bruteForceTargetPaths,
+    failureStatuses = config.detection.bruteForceStatusCodes,
+    excludedIps = config.detection.bruteForceExcludedIps,
+    logger = defaultLogger
+}: BruteForceJobOptions = {}): Promise<BruteForceDetectionResult[]> {
+    const bruteForceConfig = {
+        windowMinutes,
+        failureThreshold,
+        pathKeywords,
+        failureStatuses,
+        excludedIps
+    };
+    const response = await client.transport.request(buildEsqlQueryRequest(buildBruteForceEsqlQuery(windowMinutes)));
+    const results = detectBruteForceAttempts(parseBruteForceLogRows(response), bruteForceConfig);
+
+    if (results.length > 0) {
+        logger.warn({
+            event: 'brute_force_detected',
+            windowMinutes,
+            failureThreshold,
+            results
+        });
+    }
+
+    return results;
 }
 
 export function detectBruteForceAttempts(
@@ -97,18 +177,4 @@ function hasAuthPathKeyword(requestPath: string, pathKeywords: string[]): boolea
     const normalizedPath = requestPath.toLowerCase();
 
     return pathKeywords.some((keyword) => normalizedPath.includes(keyword));
-}
-
-function logInfo(message: string): void {
-    const now = new Date();
-    const fileName = path.basename(fileURLToPath(import.meta.url));
-
-    console.log(`[${now.toISOString()}] [${fileName}] [INFO] - ${message}`);
-}
-
-function logError(message: string): void {
-    const now = new Date();
-    const fileName = path.basename(fileURLToPath(import.meta.url));
-
-    console.log(`[${now.toISOString()}] [${fileName}] [ERROR] - ${message}`);
 }

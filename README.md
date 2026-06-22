@@ -1,83 +1,92 @@
 # Web Log Monitoring Study
 
-IIS 웹 서버 로그를 Elasticsearch API로 폴링하여 이상 징후 감지 시 이메일 알림을 전송하는 Node.js + TypeScript 서비스입니다.
+IIS 웹 로그가 적재된 외부 Elasticsearch API를 주기적으로 조회하고, 장애 또는 보안 이상 징후가 감지되면 SMTP 메일로 담당자에게 알리는 Node.js + TypeScript 서비스입니다.
 
-## 개요
+## 개발 기준
 
 | 항목 | 내용 |
 |------|------|
-| 런타임 | Node.js + TypeScript (ESM) |
-| 로그 소스 | IIS 웹 서버 (`iis-*` 인덱스) |
-| 쿼리 엔진 | Elasticsearch ES\|QL |
-| 알림 수단 | Resend (이메일) |
-| 폴링 주기 | 1분 (`config.jobsPollingMinutes`) |
+| 실행 환경 | Native Windows 권장 |
+| WSL | 추후 방화벽 CLI 연동을 위해 지원하지 않음 |
+| Elasticsearch API | `https://api.gdgoc.net/` |
+| 인증 | Basic Auth, 기존 Elastic 계정 정보 사용 |
+| 대상 인덱스 | `iis-*` |
+| 쿼리 방식 | Elasticsearch ES\|QL `POST /_query` |
+| 알림 | SMTP |
 
-## 아키텍처
+## 탐지 시나리오
 
-```
+| 시나리오 | 기준 | 구현 위치 |
+|----------|------|-----------|
+| DDoS 의심 | 동일 IP의 단시간 과다 접속 | `src/jobs/DDos.job/job.ts` |
+| 서비스 장애 | API domain별 HTTP 5xx 응답 비율 급증 | `src/jobs/server-error.job/job.ts` |
+| 보안 위협 | `.env`, `/admin` 등 민감 경로 접근 시도 | `src/jobs/sensitive-path.job/job.ts` |
+
+## 프로젝트 구조
+
+```text
 src/
-├── app.ts                         # 진입점 — setInterval로 모든 잡 실행
-├── config.ts                      # 전역 설정 (폴링 주기 등)
+├── app.ts                         # 폴링 실행 및 알림 전송 흐름
+├── config.ts                      # 환경 변수 기반 설정
 ├── jobs/
-│   ├── brute-force.job/job.ts     # 무차별 대입 로그인 시도 탐지
-│   ├── DDos.job/job.ts            # DDoS 패턴 탐지
-│   ├── server-error.job/job.ts    # 5xx 서버 오류 모니터링
-│   ├── web-error.job/job.ts       # 4xx 웹 오류 모니터링
-│   └── mail-notification.job/job.ts # Resend를 통한 이메일 알림 전송
+│   ├── DDos.job/job.ts            # DDoS 의심 탐지 스텁
+│   ├── server-error.job/job.ts    # 5xx 장애 탐지 스텁
+│   ├── sensitive-path.job/job.ts  # 민감 경로 접근 탐지 스텁
+│   └── mail-notification.job/job.ts # SMTP 알림 스텁
 └── utils/
-    ├── elastic-query.client.ts    # ES|QL로 로그 조회
-    └── elastic-user.client.ts     # Elasticsearch 사용자 목록 조회
+    ├── elastic.client.ts          # Elasticsearch 공식 클라이언트
+    ├── elastic-query.client.ts    # ES|QL _query 호출
+    └── logger.ts                  # ECS 형식 Pino logger
 ```
-
-**잡 패턴:** 각 잡은 `src/jobs/<name>.job/job.ts`에 위치하며, 단일 async 함수를 export합니다. 실패 시 빈 배열을 반환하고 예외를 throw하지 않습니다.
-
-**에러 로깅 형식:** `[ISO timestamp] [filename] [ERROR] - message`
 
 ## 시작하기
 
-### 환경 변수 설정
+Windows CMD:
 
-`.env.example`을 복사하여 `.env`를 생성하고 값을 채웁니다.
+```cmd
+copy .env.example .env
+npm install
+npm run dev:win
+```
+
+공통 실행:
 
 ```bash
-cp .env.example .env
+npm install
+npm run dev
 ```
+
+검증:
+
+```bash
+npm run check
+npm test
+```
+
+## 환경 변수
 
 | 변수 | 설명 |
 |------|------|
-| `ELASTIC_USERNAME` | Elasticsearch Basic Auth 사용자명 |
-| `ELASTIC_PASSWORD` | Elasticsearch Basic Auth 비밀번호 |
-| `RESEND_TOKEN` | Resend API 이메일 발송 토큰 |
+| `ELASTICSEARCH_URL` | Elasticsearch API 엔드포인트. 기본값 `https://api.gdgoc.net` |
+| `ELASTICSEARCH_INDEX_PATTERN` | 조회 대상 인덱스. 기본값 `iis-*` |
+| `ELASTICSEARCH_TIMEOUT_MS` | Elasticsearch 요청 타임아웃(ms) |
+| `ELASTIC_USERNAME` | Basic Auth 사용자명 |
+| `ELASTIC_PASSWORD` | Basic Auth 비밀번호 |
+| `JOBS_POLLING_MINUTES` | 탐지 주기(분) |
+| `DETECTION_WINDOW_MINUTES` | 한 번의 탐지에서 조회할 최근 시간 범위(분) |
+| `DDOS_REQUESTS_PER_IP` | DDoS 의심 IP별 요청 수 기준 |
+| `SERVER_ERROR_RATE_PERCENT` | 서비스 장애 판단용 API domain별 5xx 응답 비율 기준(%) |
+| `SENSITIVE_PATHS` | 쉼표로 구분한 민감 경로 목록 |
+| `SMTP_HOST` | SMTP 서버 호스트 |
+| `SMTP_PORT` | SMTP 포트 |
+| `SMTP_SECURE` | TLS 직접 연결 여부. 465면 `true`, STARTTLS면 `false` |
+| `SMTP_USERNAME` | SMTP 인증 사용자명 |
+| `SMTP_PASSWORD` | SMTP 인증 비밀번호 |
+| `SMTP_FROM` | 발신자 메일 주소 |
+| `SMTP_TO` | 쉼표로 구분한 수신자 메일 주소 목록 |
+| `LOG_LEVEL` | 로그 레벨 |
 
-### 설치 및 실행
+## 참고 문서
 
-```bash
-# 의존성 설치
-npm install
-
-# 개발 서버 실행 (tsx 사용, 빌드 불필요)
-npm run dev
-
-# 타입 체크
-npx tsc --noEmit
-```
-
-## 주요 규칙
-
-- ESM 전용 프로젝트 (`"type": "module"`); import 경로에 `.ts` 확장자 사용
-- `tsconfig.json`의 `noEmit: true` — `tsx`로 직접 실행, 컴파일 아웃풋 불사용
-- TypeScript 엄격 모드: `strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes` 활성화
-- 잡은 실패해도 예외를 throw하지 않고 빈 배열 반환
-
-## Elasticsearch 쿼리 예시
-
-```esql
-FROM iis-*
-| WHERE @timestamp > NOW() - 5m
-| DROP *.keyword
-| SORT @timestamp DESC
-```
-
-## 라이선스
-
-이 프로젝트는 학습 목적으로 작성되었습니다.
+- ES\|QL 문법: <https://www.elastic.co/docs/reference/query-languages/esql>
+- Elasticsearch Query API: <https://www.elastic.co/docs/api/doc/elasticsearch/group/endpoint-query>
