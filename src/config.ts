@@ -35,6 +35,12 @@ export const config = {
         },
         get sensitivePaths() {
             return process.env.SENSITIVE_PATHS ?? '/.env,/admin';
+        },
+        get webErrorRatePercent() {
+            return Number(process.env.WEB_ERROR_RATE_PERCENT ?? 10);
+        },
+        get excludedDomains() {
+            return (process.env.EXCLUDED_DOMAINS ?? '').split(',').filter(Boolean);
         }
     },
     smtp: {
