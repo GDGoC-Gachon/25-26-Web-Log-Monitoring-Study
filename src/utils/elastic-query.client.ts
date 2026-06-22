@@ -18,7 +18,7 @@ export function buildRecentIisLogsEsqlQuery(minutes: number = config.detection.w
     return [
         `FROM ${config.elasticsearch.indexPattern}`,
         `| WHERE @timestamp > NOW() - ${minutes}m`,
-        '| KEEP @timestamp, c_ip, cs_method, cs_uri_stem, sc_status, time_taken, cs_user_agent',
+        '| KEEP @timestamp, client_ip, http_method, path, protocol_status, time_taken, user_agent',
         '| SORT @timestamp DESC'
     ].join(' ');
 }

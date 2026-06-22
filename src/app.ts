@@ -1,6 +1,3 @@
-import dotenv from 'dotenv';
-dotenv.config();
-
 import { config } from './config.ts';
 import { DDosJob } from './jobs/DDos.job/job.ts';
 import { mailNotification } from './jobs/mail-notification.job/job.ts';
