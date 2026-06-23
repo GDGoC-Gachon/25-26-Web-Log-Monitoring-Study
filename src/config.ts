@@ -41,6 +41,9 @@ export const config = {
         get ddosRequestsPerIp() {
             return Number(process.env.DDOS_REQUESTS_PER_IP ?? 300);
         },
+        get ddosExcludedIps() {
+            return parseCsv(process.env.DDOS_EXCLUDED_IPS, []);
+        },
         get bruteForceMaxFailures() {
             return Number(process.env.BRUTE_FORCE_MAX_FAILURES ?? 30);
         },
@@ -57,7 +60,7 @@ export const config = {
             return Number(process.env.SERVER_ERROR_RATE_PERCENT ?? 5);
         },
         get sensitivePaths() {
-            return process.env.SENSITIVE_PATHS ?? '/.env,/admin';
+            return parseCsv(process.env.SENSITIVE_PATHS, ['/.env', '/admin']);
         },
         get webErrorRatePercent() {
             return Number(process.env.WEB_ERROR_RATE_PERCENT ?? 10);
@@ -87,6 +90,9 @@ export const config = {
         },
         get to() {
             return process.env.SMTP_TO;
+        },
+        get domainRecipients() {
+            return process.env.SMTP_DOMAIN_RECIPIENTS;
         }
     }
 };

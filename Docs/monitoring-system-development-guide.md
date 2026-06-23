@@ -34,18 +34,16 @@ flowchart LR
 | 시나리오 | 구현 기준 | 설정 |
 |----------|-----------|------|
 | 무차별 대입 탐지 | 최근 조회 구간에서 login, auth 관련 요청 중 동일 client_ip, domain 기준 400, 401, 403 응답 수가 BRUTE_FORCE_MAX_FAILURES 이상이면 탐지 | `BRUTE_FORCE_MAX_FAILURES` |
-| DDoS 의심 탐지 | 최근 조회 구간에서 동일 `c_ip` 요청 수가 기준 이상이면 탐지 | `DDOS_REQUESTS_PER_IP` |
-| 웹 서비스 에러 탐지 | 최근 조회 구간에서 HTTP 4xx 응답 수가 WEB_ERROR_COUNT 이상이면 탐지 | `WEB_ERROR_COUNT` |
-| 서버 에러 탐지 | 최근 조회 구간에서 HTTP 5xx 응답 수가 SERVER_ERROR_COUNT 이상이면 탐지 | `SERVER_ERROR_COUNT` |
-| 보안 위협 탐지 | 최근 조회 구간에서 `cs_uri_stem`이 민감 경로 목록과 일치하면 탐지 | `SENSITIVE_PATHS` |
+| DDoS 의심 탐지 | 최근 조회 구간에서 동일 `client_ip` 요청 수가 기준 이상이면 탐지하고 domain별 요청 수도 함께 집계 | `DDOS_REQUESTS_PER_IP`, `DDOS_EXCLUDED_IPS` |
+| 웹 서비스 에러 탐지 | 최근 조회 구간에서 domain별 HTTP 4xx 응답 비율이 기준 이상이면 탐지 | `WEB_ERROR_RATE_PERCENT`, `EXCLUDED_DOMAINS` |
+| 서버 에러 탐지 | 최근 조회 구간에서 API domain별 HTTP 5xx 응답 비율이 기준 이상이면 탐지 | `SERVER_ERROR_RATE_PERCENT`, `EXCLUDED_DOMAINS` |
+| 보안 위협 탐지 | 최근 조회 구간에서 `path`가 민감 경로 목록과 일치하거나 하위 경로이면 탐지 | `SENSITIVE_PATHS` |
 
 조회 구간은 `DETECTION_WINDOW_MINUTES`, 실행 주기는 `JOBS_POLLING_MINUTES`로 조정한다.
 
 ## 코드 작성 규칙
 
 - 탐지 job은 `src/jobs/*/job.ts`에 둔다.
-- 현재 코드는 구현 전 스텁 상태를 유지한다.
-- 실제 탐지 로직과 SMTP 발송 로직은 별도 승인 후 구현한다.
 - Elasticsearch 요청 payload 구성은 `src/utils/elastic-query.client.ts`에 둔다.
 - 인증 정보, 임계값, 수신자 정보는 `.env`에서만 관리한다.
 - 소스 코드에 계정, 비밀번호, 메일 주소 실값을 넣지 않는다.
