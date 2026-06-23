@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { config } from '../src/config.ts';
 import { buildElasticsearchClientOptions } from '../src/utils/elastic.client.ts';
 import { buildEsqlQueryRequest, buildRecentIisLogsEsqlQuery } from '../src/utils/elastic-query.client.ts';
 import { buildServerErrorEsqlQuery, extractApiDomain, serverErrorJob } from '../src/jobs/server-error.job/job.ts';
@@ -62,6 +63,22 @@ test('buildRecentIisLogsEsqlQuery keeps the current IIS log fields', () => {
 
 test('logger exposes an ECS-aware pino logger', () => {
     assert.equal(typeof logger.info, 'function');
+});
+
+test('config reads polling and detection windows from environment variables', () => {
+    const previousJobsPollingMinutes = process.env.JOBS_POLLING_MINUTES;
+    const previousDetectionWindowMinutes = process.env.DETECTION_WINDOW_MINUTES;
+
+    try {
+        process.env.JOBS_POLLING_MINUTES = '7';
+        process.env.DETECTION_WINDOW_MINUTES = '11';
+
+        assert.equal(config.jobsPollingMinutes, 7);
+        assert.equal(config.detection.windowMinutes, 11);
+    } finally {
+        restoreEnvValue('JOBS_POLLING_MINUTES', previousJobsPollingMinutes);
+        restoreEnvValue('DETECTION_WINDOW_MINUTES', previousDetectionWindowMinutes);
+    }
 });
 
 // 쿼리 문자열이 올바르게 생성되는지 확인 -> FROM iis-*, 시간 범위 필터, KEEP 필드 3가지가 모두 포함되어 있는지 검증
@@ -278,3 +295,12 @@ test('serverErrorJob excludes specified API domains from detection', async () =>
     ]);
     assert.equal(warnings.length, 1);
 });
+
+function restoreEnvValue(name: string, value: string | undefined): void {
+    if (value === undefined) {
+        delete process.env[name];
+        return;
+    }
+
+    process.env[name] = value;
+}
