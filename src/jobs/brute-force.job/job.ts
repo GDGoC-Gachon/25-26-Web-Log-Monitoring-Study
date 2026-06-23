@@ -1,8 +1,9 @@
-import type { TransportRequestParams } from '@elastic/transport';
 import { config } from '../../config.ts';
 import { elasticClient } from '../../utils/elastic.client.ts';
 import { buildEsqlQueryRequest } from '../../utils/elastic-query.client.ts';
 import { logger as defaultLogger } from '../../utils/logger.ts';
+import type { DetectionLogger } from '../../types/detection.ts';
+import type { ElasticsearchLikeClient, EsqlResponse } from '../../types/elastic.ts';
 import type { WebLog } from '../../types/web-log.ts';
 
 export interface BruteForceDetectionResult {
@@ -29,26 +30,6 @@ interface BruteForceGroup {
     count: number;
 }
 
-type EsqlColumn = {
-    name: string;
-};
-
-type EsqlResponse = {
-    columns?: EsqlColumn[];
-    values?: unknown[][];
-    body?: EsqlResponse;
-};
-
-type ElasticsearchLikeClient = {
-    transport: {
-        request(request: TransportRequestParams): Promise<EsqlResponse>;
-    };
-};
-
-type BruteForceLogger = {
-    warn(details: unknown): void;
-};
-
 type BruteForceJobOptions = {
     client?: ElasticsearchLikeClient;
     windowMinutes?: number;
@@ -56,7 +37,7 @@ type BruteForceJobOptions = {
     pathKeywords?: string[];
     failureStatuses?: number[];
     excludedIps?: string[];
-    logger?: BruteForceLogger;
+    logger?: DetectionLogger;
 };
 
 export function buildBruteForceEsqlQuery(minutes: number = config.detection.windowMinutes): string {

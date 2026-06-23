@@ -52,7 +52,7 @@ test('buildEsqlQueryRequest creates the Elasticsearch ES|QL _query request', () 
     });
 });
 
-test('buildRecentIisLogsEsqlQuery keeps the current IIS log fields without implementing detection jobs', () => {
+test('buildRecentIisLogsEsqlQuery keeps the current IIS log fields', () => {
     const query = buildRecentIisLogsEsqlQuery(15);
 
     assert.match(query, /FROM iis-\*/);
@@ -231,5 +231,50 @@ test('serverErrorJob reports detections by API domain when 5xx rate meets the th
         }
     ]);
     assert.equal(requests.length, 1);
+    assert.equal(warnings.length, 1);
+});
+
+test('serverErrorJob excludes specified API domains from detection', async () => {
+    const warnings: unknown[] = [];
+
+    const finding = await serverErrorJob({
+        client: {
+            transport: {
+                async request() {
+                    return {
+                        columns: [
+                            { name: 'path' },
+                            { name: 'protocol_status' }
+                        ],
+                        values: [
+                            ['/api/v1/orders/list', 500],
+                            ['/api/v1/orders/detail', 500],
+                            ['/api/v1/users/me', 500],
+                            ['/api/v1/users/me', 200]
+                        ]
+                    };
+                }
+            }
+        },
+        errorRateThresholdPercent: 50,
+        windowMinutes: 5,
+        excludedDomains: ['orders'],
+        logger: {
+            warn(details: unknown) {
+                warnings.push(details);
+            }
+        }
+    });
+
+    assert.equal(finding.detected, true);
+    assert.ok(!finding.domainFindings.find((domainFinding) => domainFinding.domain === 'orders'));
+    assert.deepEqual(finding.domainFindings, [
+        {
+            domain: 'users',
+            totalRequests: 2,
+            errorCount: 1,
+            errorRatePercent: 50
+        }
+    ]);
     assert.equal(warnings.length, 1);
 });

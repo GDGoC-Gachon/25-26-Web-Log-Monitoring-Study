@@ -8,5 +8,5 @@
 | REQ-DDOS-002 | 동일 client_ip 기준 요청 수를 계산해야 한다. |
 | REQ-DDOS-003 | 동일 domain 기준 요청 수를 계산해야 한다. |
 | REQ-DDOS-004 | 요청 수가 `DDOS_REQUESTS_PER_IP` 이상인 경우 악성 client_ip로 판단해야 한다. |
-| REQ-DDOS-005 | 예외 IP를 n개 이상 등록할 수 있어야 한다. |
+| REQ-DDOS-005 | 예외 IP를 `DDOS_EXCLUDED_IPS`에 n개 이상 등록할 수 있어야 한다. |
 | REQ-DDOS-006 | 예외 IP는 탐지 대상에서 제외해야 한다. |

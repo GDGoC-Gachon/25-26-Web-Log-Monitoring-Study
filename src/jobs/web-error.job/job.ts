@@ -2,50 +2,24 @@ import { config } from '../../config.ts';
 import { elasticClient } from '../../utils/elastic.client.ts';
 import { buildEsqlQueryRequest } from '../../utils/elastic-query.client.ts';
 import { logger as defaultLogger } from '../../utils/logger.ts';
-
-// 도메인 단위 웹 서비스 에러 탐지 결과
-type WebErrorDomainFinding = {
-    domain: string; // 집계 대상 도메인
-    totalRequests: number; // 해당 도메인 전체 요청 수
-    errorCount: number; // 해당 도메인 4xx 에러 요청 수
-    errorRatePercent: number; // 전체 요청 대비 4xx 에러 비율 (소수점 2자리)
-};
+import type { DetectionLogger, DomainErrorFinding } from '../../types/detection.ts';
+import type { EsqlQueryExecutor, EsqlResponse } from '../../types/elastic.ts';
 
 // webErrorJob 함수 최종 반환 타입
 type WebErrorJobResult = {
     detected: boolean; // 탐지 조건 충족한 도메인이 하나라도 있으면 true
     errorRateThresholdPercent: number; // 탐지에 사용된 4xx 비율 임계값 (%)
     windowMinutes: number; // 탐지에 사용된 시간 윈도우 (분)
-    domainFindings: WebErrorDomainFinding[]; // 도메인별 집계 결과 전체 목록
-};
-
-// ES|QL 응답의 columns 배열 원소 타입
-type EsqlColumn = {
-    name: string;
-};
-
-// Elasticsearch ES|QL 응답 타입
-type EsqlResponse = {
-    columns?: EsqlColumn[]; // 필드 메타데이터 배열 (이름, 타입)
-    values?: unknown[][]; // 실제 로그 데이터 2차원 배열
-    body?: EsqlResponse; // 일부 클라이언트 버전에서 응답이 중첩되어 오는 경우
-};
-
-// ES 쿼리 실행 함수 타입
-type QueryExecutor = (query: string) => Promise<EsqlResponse>;
-
-// 경고 로그 출력을 위한 logger 추상 타입
-type WebErrorLogger = {
-    warn(details: unknown): void;
+    domainFindings: DomainErrorFinding[]; // 도메인별 집계 결과 전체 목록
 };
 
 // webErrorJob 함수에 주입 가능한 옵션 타입
 type WebErrorJobOptions = {
-    executeQuery?: QueryExecutor; // ES 쿼리 실행 함수 (기본값: 실제 elasticClient 사용)
+    executeQuery?: EsqlQueryExecutor; // ES 쿼리 실행 함수 (기본값: 실제 elasticClient 사용)
     errorRateThresholdPercent?: number;// 탐지로 판정하기 위한 4xx 비율 임계값 (기본값: config.detection.webErrorRatePercent)
     windowMinutes?: number; // 분석 대상 시간 범위 (기본값: config.detection.windowMinutes)
     excludedDomains?: string[]; // 탐지에서 제외할 도메인 목록 (기본값: config.detection.excludedDomains)
-    logger?: WebErrorLogger; // 경고 로그 출력 logger (기본값: defaultLogger)
+    logger?: DetectionLogger; // 경고 로그 출력 logger (기본값: defaultLogger)
 };
 
 // 파싱된 로그 한 행의 타입
@@ -65,7 +39,7 @@ export function buildWebErrorEsqlQuery(minutes: number = config.detection.window
 }
 
 // 실제 elasticClient를 사용하는 기본 QueryExecutor
-function createDefaultQueryExecutor(): QueryExecutor {
+function createDefaultQueryExecutor(): EsqlQueryExecutor {
     return async (query: string): Promise<EsqlResponse> => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         return (elasticClient.transport as any).request(buildEsqlQueryRequest(query));
@@ -118,16 +92,16 @@ function roundRatePercent(errorCount: number, totalRequests: number): number {
     return Math.round((errorCount / totalRequests) * 10000) / 100;
 }
 
-// 로그 행 배열을 도메인 별로 집계하여 WebErrorDomainFinding 배열로 변환
+// 로그 행 배열을 도메인 별로 집계하여 DomainErrorFinding 배열로 변환
 function buildDomainFindings(
     rows: WebErrorLogRow[],
     excludedDomains: string[]
-): WebErrorDomainFinding[] {
+): DomainErrorFinding[] {
     // Set으로 변환해 O(1) 조회
     const excludedSet = new Set(excludedDomains);
     const domainStats = new Map<
         string,
-        Omit<WebErrorDomainFinding, 'domain' | 'errorRatePercent'>
+        Omit<DomainErrorFinding, 'domain' | 'errorRatePercent'>
     >();
 
     // 각 행을 순회하면서 Map에 totalRequests/errorCount 누적
