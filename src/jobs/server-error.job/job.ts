@@ -1,20 +1,15 @@
 import { config } from '../../config.ts';
 import { elasticClient } from '../../utils/elastic.client.ts';
 import { buildEsqlQueryRequest } from '../../utils/elastic-query.client.ts';
+import { meetsDomainErrorDetectionPolicy } from '../../utils/domain-error-detection.ts';
 import { logger as defaultLogger } from '../../utils/logger.ts';
-import type { DetectionLogger, DomainErrorFinding } from '../../types/detection.ts';
+import type { DetectionLogger, DomainErrorFinding, DomainErrorJobResult } from '../../types/detection.ts';
 import type { ElasticsearchLikeClient, EsqlResponse } from '../../types/elastic.ts';
-
-type ServerErrorJobResult = {
-    detected: boolean;
-    errorRateThresholdPercent: number;
-    windowMinutes: number;
-    domainFindings: DomainErrorFinding[];
-};
 
 type ServerErrorJobOptions = {
     client?: ElasticsearchLikeClient;
     errorRateThresholdPercent?: number;
+    minimumRequests?: number;
     windowMinutes?: number;
     excludedDomains?: string[];
     logger?: DetectionLogger;
@@ -114,26 +109,33 @@ function buildDomainFindings(rows: ServerErrorLogRow[], excludedDomains: string[
 export async function serverErrorJob({
     client = elasticClient,
     errorRateThresholdPercent = config.detection.serverErrorRatePercent,
+    minimumRequests = config.detection.serverErrorMinRequests,
     windowMinutes = config.detection.windowMinutes,
     excludedDomains = config.detection.excludedDomains,
     logger = defaultLogger
-}: ServerErrorJobOptions = {}): Promise<ServerErrorJobResult> {
+}: ServerErrorJobOptions = {}): Promise<DomainErrorJobResult> {
     const response = await client.transport.request(buildEsqlQueryRequest(buildServerErrorEsqlQuery(windowMinutes)));
     const domainFindings = buildDomainFindings(parseServerErrorLogRows(response), excludedDomains);
-    const detected = domainFindings.some((finding) => finding.errorRatePercent >= errorRateThresholdPercent);
+    const policy = { errorRateThresholdPercent, minimumRequests };
+    const detectedFindings = domainFindings.filter((finding) =>
+        meetsDomainErrorDetectionPolicy(finding, policy)
+    );
+    const detected = detectedFindings.length > 0;
 
     if (detected) {
         logger.warn({
             event: 'server_error_detected',
             errorRateThresholdPercent,
+            minimumRequests,
             windowMinutes,
-            domainFindings
+            domainFindings: detectedFindings
         });
     }
 
     return {
         detected,
         errorRateThresholdPercent,
+        minimumRequests,
         windowMinutes,
         domainFindings
     };

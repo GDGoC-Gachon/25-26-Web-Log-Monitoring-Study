@@ -59,11 +59,17 @@ export const config = {
         get serverErrorRatePercent() {
             return Number(process.env.SERVER_ERROR_RATE_PERCENT ?? 5);
         },
+        get serverErrorMinRequests() {
+            return Number(process.env.SERVER_ERROR_MIN_REQUESTS ?? 20);
+        },
         get sensitivePaths() {
             return parseCsv(process.env.SENSITIVE_PATHS, ['/.env', '/admin']);
         },
         get webErrorRatePercent() {
             return Number(process.env.WEB_ERROR_RATE_PERCENT ?? 10);
+        },
+        get webErrorMinRequests() {
+            return Number(process.env.WEB_ERROR_MIN_REQUESTS ?? 20);
         },
         get excludedDomains() {
             return (process.env.EXCLUDED_DOMAINS ?? '').split(',').filter(Boolean);
