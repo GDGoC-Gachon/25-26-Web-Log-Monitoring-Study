@@ -1,22 +1,16 @@
 import { config } from '../../config.ts';
 import { elasticClient } from '../../utils/elastic.client.ts';
 import { buildEsqlQueryRequest } from '../../utils/elastic-query.client.ts';
+import { meetsDomainErrorDetectionPolicy } from '../../utils/domain-error-detection.ts';
 import { logger as defaultLogger } from '../../utils/logger.ts';
-import type { DetectionLogger, DomainErrorFinding } from '../../types/detection.ts';
+import type { DetectionLogger, DomainErrorFinding, DomainErrorJobResult } from '../../types/detection.ts';
 import type { EsqlQueryExecutor, EsqlResponse } from '../../types/elastic.ts';
-
-// webErrorJob 함수 최종 반환 타입
-type WebErrorJobResult = {
-    detected: boolean; // 탐지 조건 충족한 도메인이 하나라도 있으면 true
-    errorRateThresholdPercent: number; // 탐지에 사용된 4xx 비율 임계값 (%)
-    windowMinutes: number; // 탐지에 사용된 시간 윈도우 (분)
-    domainFindings: DomainErrorFinding[]; // 도메인별 집계 결과 전체 목록
-};
 
 // webErrorJob 함수에 주입 가능한 옵션 타입
 type WebErrorJobOptions = {
     executeQuery?: EsqlQueryExecutor; // ES 쿼리 실행 함수 (기본값: 실제 elasticClient 사용)
     errorRateThresholdPercent?: number;// 탐지로 판정하기 위한 4xx 비율 임계값 (기본값: config.detection.webErrorRatePercent)
+    minimumRequests?: number; // 비율 임계값을 적용할 최소 요청 수 (기본값: config.detection.webErrorMinRequests)
     windowMinutes?: number; // 분석 대상 시간 범위 (기본값: config.detection.windowMinutes)
     excludedDomains?: string[]; // 탐지에서 제외할 도메인 목록 (기본값: config.detection.excludedDomains)
     logger?: DetectionLogger; // 경고 로그 출력 logger (기본값: defaultLogger)
@@ -148,10 +142,11 @@ function buildDomainFindings(
 export async function webErrorJob({
     executeQuery = createDefaultQueryExecutor(),
     errorRateThresholdPercent = config.detection.webErrorRatePercent,
+    minimumRequests = config.detection.webErrorMinRequests,
     windowMinutes = config.detection.windowMinutes,
     excludedDomains = config.detection.excludedDomains,
     logger = defaultLogger
-}: WebErrorJobOptions = {}): Promise<WebErrorJobResult> {
+}: WebErrorJobOptions = {}): Promise<DomainErrorJobResult> {
     const response = await executeQuery(buildWebErrorEsqlQuery(windowMinutes));
 
     // 도메인별 집계
@@ -160,20 +155,20 @@ export async function webErrorJob({
         excludedDomains
     );
 
-    // 집계된 도메인 중 하나라도 4xx 비율이 임계값 이상이면 detected = true
-    const detected = domainFindings.some(
-        (finding) => finding.errorRatePercent >= errorRateThresholdPercent
+    const policy = { errorRateThresholdPercent, minimumRequests };
+    const detectedFindings = domainFindings.filter((finding) =>
+        meetsDomainErrorDetectionPolicy(finding, policy)
     );
+    const detected = detectedFindings.length > 0;
 
     // 경고 로그 출력
     if (detected) {
         logger.warn({
             event: 'web_error_detected',
             errorRateThresholdPercent,
+            minimumRequests,
             windowMinutes,
-            domainFindings: domainFindings.filter(
-                (f) => f.errorRatePercent >= errorRateThresholdPercent
-            )
+            domainFindings: detectedFindings
         });
     }
 
@@ -181,6 +176,7 @@ export async function webErrorJob({
     return {
         detected,
         errorRateThresholdPercent,
+        minimumRequests,
         windowMinutes,
         domainFindings
     };

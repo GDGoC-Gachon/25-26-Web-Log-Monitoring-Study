@@ -5,6 +5,7 @@ import { config } from '../src/config.ts';
 import { buildElasticsearchClientOptions } from '../src/utils/elastic.client.ts';
 import { buildEsqlQueryRequest, buildRecentIisLogsEsqlQuery } from '../src/utils/elastic-query.client.ts';
 import { buildServerErrorEsqlQuery, extractApiDomain, serverErrorJob } from '../src/jobs/server-error.job/job.ts';
+import { domainErrorFindingsToAlerts } from '../src/utils/domain-error-detection.ts';
 import { logger } from '../src/utils/logger.ts';
 import { buildWebErrorEsqlQuery, webErrorJob } from '../src/jobs/web-error.job/job.ts';
 
@@ -68,16 +69,30 @@ test('logger exposes an ECS-aware pino logger', () => {
 test('config reads polling and detection windows from environment variables', () => {
     const previousJobsPollingMinutes = process.env.JOBS_POLLING_MINUTES;
     const previousDetectionWindowMinutes = process.env.DETECTION_WINDOW_MINUTES;
+    const previousWebErrorMinRequests = process.env.WEB_ERROR_MIN_REQUESTS;
+    const previousServerErrorMinRequests = process.env.SERVER_ERROR_MIN_REQUESTS;
 
     try {
+        delete process.env.WEB_ERROR_MIN_REQUESTS;
+        delete process.env.SERVER_ERROR_MIN_REQUESTS;
+
+        assert.equal(config.detection.webErrorMinRequests, 20);
+        assert.equal(config.detection.serverErrorMinRequests, 20);
+
         process.env.JOBS_POLLING_MINUTES = '7';
         process.env.DETECTION_WINDOW_MINUTES = '11';
+        process.env.WEB_ERROR_MIN_REQUESTS = '23';
+        process.env.SERVER_ERROR_MIN_REQUESTS = '24';
 
         assert.equal(config.jobsPollingMinutes, 7);
         assert.equal(config.detection.windowMinutes, 11);
+        assert.equal(config.detection.webErrorMinRequests, 23);
+        assert.equal(config.detection.serverErrorMinRequests, 24);
     } finally {
         restoreEnvValue('JOBS_POLLING_MINUTES', previousJobsPollingMinutes);
         restoreEnvValue('DETECTION_WINDOW_MINUTES', previousDetectionWindowMinutes);
+        restoreEnvValue('WEB_ERROR_MIN_REQUESTS', previousWebErrorMinRequests);
+        restoreEnvValue('SERVER_ERROR_MIN_REQUESTS', previousServerErrorMinRequests);
     }
 });
 
@@ -103,6 +118,7 @@ test('webErrorJob reports no detection when 4xx rate is below threshold', async 
             ]
         }),
         errorRateThresholdPercent: 10,
+        minimumRequests: 20,
         windowMinutes: 5,
         excludedDomains: [],
         logger: { warn(d: unknown) { warnings.push(d); } }
@@ -126,19 +142,20 @@ test('webErrorJob detects web error when 4xx rate meets threshold', async () => 
                     ...Array.from({ length: 35 }, () => ['shop.gdgoc.net', '200']),
                     ...Array.from({ length: 10 }, () => ['shop.gdgoc.net', '403']),
                     ...Array.from({ length: 5  }, () => ['shop.gdgoc.net', '404']),
-                    ...Array.from({ length: 19 }, () => ['api.gdgoc.net',  '200']),
-                    ...Array.from({ length: 1  }, () => ['api.gdgoc.net',  '401']),
+                    ['api.gdgoc.net', '401'],
                     ['shop.gdgoc.net', '500']
                 ]
             };
         },
         errorRateThresholdPercent: 10,
+        minimumRequests: 20,
         windowMinutes: 5,
         excludedDomains: [],
         logger: { warn(d: unknown) { warnings.push(d); } }
     });
 
     assert.equal(result.detected, true);
+    assert.equal(result.minimumRequests, 20);
     assert.equal(queries.length, 1);
     assert.equal(warnings.length, 1);
 
@@ -151,6 +168,10 @@ test('webErrorJob detects web error when 4xx rate meets threshold', async () => 
     const apiFinding = result.domainFindings.find((f) => f.domain === 'api.gdgoc.net');
     assert.ok(apiFinding);
     assert.equal(apiFinding.errorCount, 1);
+    assert.equal(apiFinding.errorRatePercent, 100);
+
+    const warning = warnings[0] as { domainFindings: Array<{ domain: string }> };
+    assert.deepEqual(warning.domainFindings.map((finding) => finding.domain), ['shop.gdgoc.net']);
 });
 
 // elastic.gdgoc.net은 4xx 비율이 100%지만 excludedDomains에 등록되어 있어서 domainFindings에 나타나지 않아야 함
@@ -167,6 +188,7 @@ test('webErrorJob excludes specified domains from detection', async () => {
             ]
         }),
         errorRateThresholdPercent: 10,
+        minimumRequests: 20,
         windowMinutes: 5,
         excludedDomains: ['elastic.gdgoc.net'],
         logger: { warn(d: unknown) { warnings.push(d); } }
@@ -175,6 +197,71 @@ test('webErrorJob excludes specified domains from detection', async () => {
     assert.equal(result.detected, true);
     assert.ok(!result.domainFindings.find((f) => f.domain === 'elastic.gdgoc.net'));
     assert.ok(result.domainFindings.find((f) => f.domain === 'shop.gdgoc.net'));
+});
+
+test('webErrorJob ignores a 100% 4xx rate below the minimum request count', async () => {
+    const warnings: unknown[] = [];
+
+    const result = await webErrorJob({
+        executeQuery: async () => ({
+            columns: [{ name: 'domain' }, { name: 'protocol_status' }],
+            values: [['shop.gdgoc.net', '404']]
+        }),
+        errorRateThresholdPercent: 10,
+        minimumRequests: 20,
+        windowMinutes: 5,
+        excludedDomains: [],
+        logger: { warn(details: unknown) { warnings.push(details); } }
+    });
+
+    assert.equal(result.detected, false);
+    assert.equal(result.domainFindings[0]?.errorRatePercent, 100);
+    assert.equal(warnings.length, 0);
+});
+
+test('webErrorJob applies the rate threshold at the minimum request count', async () => {
+    const warnings: unknown[] = [];
+
+    const result = await webErrorJob({
+        executeQuery: async () => ({
+            columns: [{ name: 'domain' }, { name: 'protocol_status' }],
+            values: [
+                ...Array.from({ length: 18 }, () => ['shop.gdgoc.net', '200']),
+                ...Array.from({ length: 2 }, () => ['shop.gdgoc.net', '404'])
+            ]
+        }),
+        errorRateThresholdPercent: 10,
+        minimumRequests: 20,
+        windowMinutes: 5,
+        excludedDomains: [],
+        logger: { warn(details: unknown) { warnings.push(details); } }
+    });
+
+    assert.equal(result.detected, true);
+    assert.equal(result.domainFindings[0]?.totalRequests, 20);
+    assert.equal(result.domainFindings[0]?.errorRatePercent, 10);
+    assert.equal(warnings.length, 1);
+});
+
+test('webErrorJob applies the minimum request count to each domain independently', async () => {
+    const result = await webErrorJob({
+        executeQuery: async () => ({
+            columns: [{ name: 'domain' }, { name: 'protocol_status' }],
+            values: [
+                ...Array.from({ length: 10 }, () => ['a.gdgoc.net', '404']),
+                ...Array.from({ length: 10 }, () => ['b.gdgoc.net', '404'])
+            ]
+        }),
+        errorRateThresholdPercent: 10,
+        minimumRequests: 20,
+        windowMinutes: 5,
+        excludedDomains: [],
+        logger: { warn() { assert.fail('warning should not be emitted'); } }
+    });
+
+    assert.equal(result.detected, false);
+    assert.equal(result.domainFindings.length, 2);
+    assert.ok(result.domainFindings.every((finding) => finding.errorRatePercent === 100));
 });
 
 test('buildServerErrorEsqlQuery fetches recent API requests for rate-based server error detection', () => {
@@ -224,6 +311,7 @@ test('serverErrorJob reports detections by API domain when 5xx rate meets the th
     const finding = await serverErrorJob({
         client,
         errorRateThresholdPercent: 50,
+        minimumRequests: 1,
         windowMinutes: 5,
         logger: {
             warn(details: unknown) {
@@ -274,6 +362,7 @@ test('serverErrorJob excludes specified API domains from detection', async () =>
             }
         },
         errorRateThresholdPercent: 50,
+        minimumRequests: 1,
         windowMinutes: 5,
         excludedDomains: ['orders'],
         logger: {
@@ -294,6 +383,94 @@ test('serverErrorJob excludes specified API domains from detection', async () =>
         }
     ]);
     assert.equal(warnings.length, 1);
+});
+
+test('serverErrorJob ignores a 100% 5xx rate below the minimum request count', async () => {
+    const warnings: unknown[] = [];
+
+    const result = await serverErrorJob({
+        client: {
+            transport: {
+                async request() {
+                    return {
+                        columns: [
+                            { name: 'path' },
+                            { name: 'protocol_status' }
+                        ],
+                        values: [['/api/v1/orders/list', 500]]
+                    };
+                }
+            }
+        },
+        errorRateThresholdPercent: 5,
+        minimumRequests: 20,
+        windowMinutes: 5,
+        excludedDomains: [],
+        logger: { warn(details: unknown) { warnings.push(details); } }
+    });
+
+    assert.equal(result.detected, false);
+    assert.equal(result.domainFindings[0]?.errorRatePercent, 100);
+    assert.equal(warnings.length, 0);
+});
+
+test('serverErrorJob applies the rate threshold at the minimum request count', async () => {
+    const warnings: unknown[] = [];
+
+    const result = await serverErrorJob({
+        client: {
+            transport: {
+                async request() {
+                    return {
+                        columns: [
+                            { name: 'path' },
+                            { name: 'protocol_status' }
+                        ],
+                        values: [
+                            ...Array.from({ length: 19 }, () => ['/api/v1/orders/list', 200]),
+                            ['/api/v1/orders/list', 500]
+                        ]
+                    };
+                }
+            }
+        },
+        errorRateThresholdPercent: 5,
+        minimumRequests: 20,
+        windowMinutes: 5,
+        excludedDomains: [],
+        logger: { warn(details: unknown) { warnings.push(details); } }
+    });
+
+    assert.equal(result.detected, true);
+    assert.equal(result.domainFindings[0]?.totalRequests, 20);
+    assert.equal(result.domainFindings[0]?.errorRatePercent, 5);
+    assert.equal(warnings.length, 1);
+});
+
+test('domainErrorFindingsToAlerts keeps the minimum request floor during final alert conversion', () => {
+    const alerts = domainErrorFindingsToAlerts('WEB_ERROR', {
+        detected: true,
+        errorRateThresholdPercent: 10,
+        minimumRequests: 20,
+        windowMinutes: 5,
+        domainFindings: [
+            {
+                domain: 'low-traffic.gdgoc.net',
+                totalRequests: 1,
+                errorCount: 1,
+                errorRatePercent: 100
+            },
+            {
+                domain: 'shop.gdgoc.net',
+                totalRequests: 20,
+                errorCount: 2,
+                errorRatePercent: 10
+            }
+        ]
+    });
+
+    assert.equal(alerts.length, 1);
+    assert.equal(alerts[0]?.domain, 'shop.gdgoc.net');
 });
 
 function restoreEnvValue(name: string, value: string | undefined): void {

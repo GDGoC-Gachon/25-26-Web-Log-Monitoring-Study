@@ -10,6 +10,17 @@ export type DomainErrorFinding = {
     errorRatePercent: number;
 };
 
+export type DomainErrorDetectionPolicy = {
+    errorRateThresholdPercent: number;
+    minimumRequests: number;
+};
+
+export type DomainErrorJobResult = DomainErrorDetectionPolicy & {
+    detected: boolean;
+    windowMinutes: number;
+    domainFindings: DomainErrorFinding[];
+};
+
 export type DetectionType =
     | 'BRUTE_FORCE'
     | 'DDOS'
