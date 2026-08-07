@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import net from 'node:net';
 import tls from 'node:tls';
 
@@ -6,11 +8,18 @@ import type {
     DetectionAlert,
     DetectionLogger,
     DetectionRecipient,
+    DetectionType,
     SmtpMessage
 } from '../../types/detection.ts';
 import { logger as defaultLogger } from '../../utils/logger.ts';
 
-type EmailContent = Pick<SmtpMessage, 'from' | 'to' | 'subject' | 'text'>;
+type EmailContent = Pick<SmtpMessage, 'from' | 'to' | 'subject' | 'text' | 'html'>;
+
+type MailTemplate = {
+    fileName: string;
+    subject: string;
+    placeholders: (alert: DetectionAlert) => Record<string, string>;
+};
 
 type MailNotificationSmtpConfig = {
     host?: string | undefined;
@@ -36,6 +45,56 @@ type MailNotificationResult = {
 
 type SmtpSocket = net.Socket | tls.TLSSocket;
 
+const mailFormDirectory = new URL('../../mailForm/', import.meta.url);
+const templateContents = new Map<string, Promise<string>>();
+
+const mailTemplates: Record<DetectionType, MailTemplate> = {
+    BRUTE_FORCE: {
+        fileName: 'security-monitoring-brute-force-login-attack-detection.html',
+        subject: '[GDGoc Gachon 보안관제] 무차별 대입 공격 탐지',
+        placeholders: (alert) => ({
+            '#TargetDomain#': displayValue(alert.domain),
+            '#AttackerIp#': displayValue(alert.clientIp),
+            '#AttackCount#': displayNumber(alert.count)
+        })
+    },
+    DDOS: {
+        fileName: 'security-monitoring-ddos-attack-detection.html',
+        subject: '[GDGoc Gachon 보안관제] DDoS 공격 탐지',
+        placeholders: (alert) => ({
+            '#TargetDomain#': formatDdosDomains(alert),
+            '#AttackerIp#': displayValue(alert.clientIp),
+            '#AttackCount#': displayNumber(alert.count)
+        })
+    },
+    SERVER_ERROR: {
+        fileName: 'security-monitoring-server-response-error-spike-detection.html',
+        subject: '[GDGoc Gachon 보안관제] 서버 5xx 응답 급증 탐지',
+        placeholders: (alert) => ({
+            '#TargetDomain#': displayValue(alert.domain),
+            '#ErrorPercent#': displayNumber(alert.errorRatePercent)
+        })
+    },
+    SENSITIVE_PATH: {
+        fileName: 'security-monitoring-sensitive-path-access-detection.html',
+        subject: '[GDGoc Gachon 보안관제] 민감 경로 접근 탐지',
+        placeholders: (alert) => ({
+            '#TargetDomain#': displayValue(alert.domain),
+            '#AttackerIp#': displayValue(alert.clientIp),
+            '#TargetPath#': displayValue(alert.path),
+            '#AccessCount#': displayNumber(alert.count)
+        })
+    },
+    WEB_ERROR: {
+        fileName: 'security-monitoring-web-service-response-error-spike-detection.html',
+        subject: '[GDGoc Gachon 보안관제] 웹 서비스 4xx 응답 급증 탐지',
+        placeholders: (alert) => ({
+            '#TargetDomain#': displayValue(alert.domain),
+            '#ErrorPercent#': displayNumber(alert.errorRatePercent)
+        })
+    }
+};
+
 export async function mailNotification({
     alerts = [],
     smtp = getDefaultSmtpConfig(),
@@ -51,7 +110,7 @@ export async function mailNotification({
 
     const recipients = resolveDetectionRecipients(alerts, smtp.recipients);
 
-    if (!smtp.host || !smtp.from || recipients.length === 0) {
+    if (!smtp.host || !smtp.from || smtp.recipients.length === 0) {
         logger.warn({
             event: 'mail_notification_skipped',
             reason: 'SMTP host, sender, or recipients are not configured',
@@ -65,38 +124,70 @@ export async function mailNotification({
         };
     }
 
-    const email = buildDetectionAlertEmail(alerts, {
-        from: smtp.from,
-        to: recipients
-    });
+    const notifiedRecipients = new Set<string>();
+    let sentCount = 0;
+    let hadFailure = false;
 
-    try {
-        await sendMail({
-            host: smtp.host,
-            port: smtp.port,
-            secure: smtp.secure,
-            username: smtp.username,
-            password: smtp.password,
-            ...email
-        });
+    for (const alert of alerts) {
+        const alertRecipients = resolveDetectionRecipients([alert], smtp.recipients);
 
-        return {
-            sent: true,
-            recipients
-        };
-    } catch (error) {
-        logMailError(logger, {
-            event: 'mail_notification_failed',
-            message: error instanceof Error ? error.message : 'Unknown SMTP failure',
-            alertCount: alerts.length,
-            recipientCount: recipients.length
-        });
+        for (const recipient of alertRecipients) {
+            notifiedRecipients.add(recipient);
+        }
 
-        return {
-            sent: false,
-            recipients
-        };
+        if (alertRecipients.length === 0) {
+            logger.warn({
+                event: 'mail_notification_skipped',
+                reason: 'No recipients match the detection alert',
+                alertType: alert.type,
+                recipientCount: 0
+            });
+            continue;
+        }
+
+        let email: EmailContent;
+
+        try {
+            email = await buildTemplatedDetectionAlertEmail(alert, {
+                from: smtp.from,
+                to: alertRecipients
+            });
+        } catch (error) {
+            hadFailure = true;
+            logMailError(logger, {
+                event: 'mail_notification_template_failed',
+                message: error instanceof Error ? error.message : 'Unknown mail template failure',
+                alertType: alert.type,
+                recipientCount: alertRecipients.length
+            });
+            continue;
+        }
+
+        try {
+            await sendMail({
+                host: smtp.host,
+                port: smtp.port,
+                secure: smtp.secure,
+                username: smtp.username,
+                password: smtp.password,
+                ...email
+            });
+            sentCount += 1;
+        } catch (error) {
+            hadFailure = true;
+            logMailError(logger, {
+                event: 'mail_notification_failed',
+                message: error instanceof Error ? error.message : 'Unknown SMTP failure',
+                alertType: alert.type,
+                recipientCount: alertRecipients.length
+            });
+        }
     }
+
+    return {
+        sent: sentCount > 0 && !hadFailure,
+        recipients: Array.from(notifiedRecipients)
+    };
 }
 
 export function parseDetectionRecipients(
@@ -139,7 +230,7 @@ export function resolveDetectionRecipients(
         }
 
         const recipientDomains = new Set(recipient.domains);
-        const shouldReceive = alerts.some((alert) => alert.domain && recipientDomains.has(alert.domain));
+        const shouldReceive = alerts.some((alert) => getAlertDomains(alert).some((domain) => recipientDomains.has(domain)));
 
         if (shouldReceive) {
             recipientEmails.push(recipient.email);
@@ -161,6 +252,20 @@ export function buildDetectionAlertEmail(
             '',
             ...alerts.map(formatDetectionAlert)
         ].join('\n')
+    };
+}
+
+export async function buildTemplatedDetectionAlertEmail(
+    alert: DetectionAlert,
+    emailOptions: Pick<EmailContent, 'from' | 'to'>
+): Promise<EmailContent> {
+    const template = mailTemplates[alert.type];
+    const templateContent = await loadMailTemplate(template.fileName);
+
+    return {
+        ...buildDetectionAlertEmail([alert], emailOptions),
+        subject: template.subject,
+        html: replaceTemplatePlaceholders(templateContent, template.placeholders(alert))
     };
 }
 
@@ -213,6 +318,60 @@ function splitCsv(value: string | undefined): string[] {
         .split(',')
         .map((item) => item.trim())
         .filter(Boolean);
+}
+
+function getAlertDomains(alert: DetectionAlert): string[] {
+    return [
+        ...(alert.domain ? [alert.domain] : []),
+        ...(alert.domainCounts?.map(({ domain }) => domain) ?? [])
+    ];
+}
+
+function displayValue(value: string | undefined): string {
+    return value && value.length > 0 ? value : '알 수 없음';
+}
+
+function displayNumber(value: number | undefined): string {
+    return typeof value === 'number' ? String(value) : '알 수 없음';
+}
+
+function formatDdosDomains(alert: DetectionAlert): string {
+    const domainCounts = alert.domainCounts ?? [];
+
+    if (domainCounts.length === 0) {
+        return displayValue(alert.domain);
+    }
+
+    return domainCounts.map(({ domain, count }) => `${domain} (${count})`).join(', ');
+}
+
+function loadMailTemplate(fileName: string): Promise<string> {
+    const existingTemplate = templateContents.get(fileName);
+
+    if (existingTemplate) {
+        return existingTemplate;
+    }
+
+    const template = readFile(new URL(fileName, mailFormDirectory), 'utf8');
+    templateContents.set(fileName, template);
+
+    return template;
+}
+
+function replaceTemplatePlaceholders(template: string, placeholders: Record<string, string>): string {
+    return Object.entries(placeholders).reduce(
+        (renderedTemplate, [placeholder, value]) => renderedTemplate.split(placeholder).join(escapeHtml(value)),
+        template
+    );
+}
+
+function escapeHtml(value: string): string {
+    return value
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
 }
 
 function formatDetectionAlert(alert: DetectionAlert): string {
@@ -325,14 +484,37 @@ function buildPlainAuthCommand(username: string, password: string): string {
     return `AUTH PLAIN ${Buffer.from(`\u0000${username}\u0000${password}`).toString('base64')}`;
 }
 
-function formatSmtpData(message: SmtpMessage): string {
-    return [
+export function formatSmtpData(message: SmtpMessage): string {
+    const headers = [
         `From: ${message.from}`,
         `To: ${message.to.join(', ')}`,
-        `Subject: ${message.subject}`,
+        `Subject: ${encodeMimeHeader(message.subject)}`
+    ];
+
+    if (!message.html) {
+        return [
+            ...headers,
+            'Content-Type: text/plain; charset=utf-8',
+            '',
+            escapeSmtpData(message.text)
+        ].join('\r\n');
+    }
+
+    const boundary = `web-log-monitoring-${randomUUID()}`;
+
+    return [
+        ...headers,
+        `Content-Type: multipart/alternative; boundary="${boundary}"`,
+        '',
+        `--${boundary}`,
         'Content-Type: text/plain; charset=utf-8',
         '',
-        escapeSmtpData(message.text)
+        escapeSmtpData(message.text),
+        `--${boundary}`,
+        'Content-Type: text/html; charset=utf-8',
+        '',
+        escapeSmtpData(message.html),
+        `--${boundary}--`
     ].join('\r\n');
 }
 
@@ -342,4 +524,10 @@ function escapeSmtpData(text: string): string {
         .split('\r\n')
         .map((line) => (line.startsWith('.') ? `.${line}` : line))
         .join('\r\n');
+}
+
+function encodeMimeHeader(value: string): string {
+    return /[^\x20-\x7e]/.test(value)
+        ? `=?UTF-8?B?${Buffer.from(value, 'utf8').toString('base64')}?=`
+        : value;
 }

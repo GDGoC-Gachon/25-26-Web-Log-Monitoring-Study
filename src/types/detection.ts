@@ -32,6 +32,10 @@ export type DetectionAlert = {
     type: DetectionType;
     reason: string;
     domain?: string;
+    domainCounts?: Array<{
+        domain: string;
+        count: number;
+    }>;
     clientIp?: string;
     path?: string;
     count?: number;
@@ -63,4 +67,5 @@ export type SmtpMessage = {
     to: string[];
     subject: string;
     text: string;
+    html?: string;
 };
