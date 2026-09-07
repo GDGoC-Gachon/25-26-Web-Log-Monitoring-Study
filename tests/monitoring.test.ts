@@ -269,8 +269,8 @@ test('buildServerErrorEsqlQuery fetches recent API requests for rate-based serve
 
     assert.match(query, /FROM iis-\*/);
     assert.match(query, /@timestamp > NOW\(\) - 10m/);
-    assert.match(query, /path LIKE "\/api\/v1\/%"/);
-    assert.match(query, /path LIKE "\/api\/%"/);
+    assert.match(query, /path LIKE "\/api\/v1\/\*"/);
+    assert.match(query, /path LIKE "\/api\/\*"/);
     assert.match(query, /KEEP @timestamp, path, protocol_status/);
 });
 
