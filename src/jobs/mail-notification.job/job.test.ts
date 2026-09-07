@@ -163,10 +163,17 @@ describe('detection alert emails', () => {
 describe('mailNotification', () => {
     it('does not send SMTP mail when there are no detection alerts', async () => {
         const sent: SmtpMessage[] = [];
+        const infos: unknown[] = [];
 
         const result = await mailNotification({
             alerts: [],
             smtp: smtpConfig,
+            logger: {
+                warn() {},
+                info(details: unknown) {
+                    infos.push(details);
+                }
+            },
             sendMail: async (message) => {
                 sent.push(message);
             }
@@ -174,14 +181,27 @@ describe('mailNotification', () => {
 
         assert.deepEqual(result, { sent: false, recipients: [] });
         assert.deepEqual(sent, []);
+        assert.deepEqual(infos, [{
+            event: 'mail_notification_skipped',
+            reason: 'No detection alerts',
+            alertCount: 0,
+            recipientCount: 0
+        }]);
     });
 
     it('sends one templated SMTP message for every detection alert', async () => {
         const sent: SmtpMessage[] = [];
+        const infos: unknown[] = [];
 
         const result = await mailNotification({
             alerts: templateAlerts,
             smtp: smtpConfig,
+            logger: {
+                warn() {},
+                info(details: unknown) {
+                    infos.push(details);
+                }
+            },
             sendMail: async (message) => {
                 sent.push(message);
             }
@@ -200,6 +220,10 @@ describe('mailNotification', () => {
             '[GDGoc Gachon 보안관제] 웹 서비스 4xx 응답 급증 탐지'
         ]);
         assert.ok(sent.every((message) => message.html));
+        assert.deepEqual(
+            infos.map((entry) => (entry as { event: string }).event),
+            ['mail_notification_sent', 'mail_notification_sent', 'mail_notification_sent', 'mail_notification_sent', 'mail_notification_sent']
+        );
     });
 
     it('continues sending later alerts when an SMTP send fails', async () => {

@@ -1,4 +1,5 @@
 export type DetectionLogger = {
+    info?(details: unknown): void;
     warn(details: unknown): void;
     error?(details: unknown): void;
 };

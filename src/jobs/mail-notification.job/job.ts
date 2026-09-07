@@ -102,6 +102,13 @@ export async function mailNotification({
     sendMail = sendSmtpMessage
 }: MailNotificationOptions = {}): Promise<MailNotificationResult> {
     if (alerts.length === 0) {
+        logger.info?.({
+            event: 'mail_notification_skipped',
+            reason: 'No detection alerts',
+            alertCount: 0,
+            recipientCount: 0
+        });
+
         return {
             sent: false,
             recipients: []
@@ -173,6 +180,11 @@ export async function mailNotification({
                 ...email
             });
             sentCount += 1;
+            logger.info?.({
+                event: 'mail_notification_sent',
+                alertType: alert.type,
+                recipientCount: alertRecipients.length
+            });
         } catch (error) {
             hadFailure = true;
             logMailError(logger, {
@@ -274,16 +286,16 @@ export async function sendSmtpMessage(message: SmtpMessage): Promise<void> {
 
     try {
         await readSmtpResponse(socket, [220]);
-        const ehloResponse = await writeSmtpCommand(socket, 'EHLO web-log-monitoring', [250]);
+        let ehloResponse = await writeSmtpCommand(socket, 'EHLO web-log-monitoring', [250]);
 
         if (!message.secure && hasSmtpCapability(ehloResponse, 'STARTTLS')) {
             await writeSmtpCommand(socket, 'STARTTLS', [220]);
             socket = await upgradeToTls(socket, message.host);
-            await writeSmtpCommand(socket, 'EHLO web-log-monitoring', [250]);
+            ehloResponse = await writeSmtpCommand(socket, 'EHLO web-log-monitoring', [250]);
         }
 
-        if (message.username && message.password) {
-            await writeSmtpCommand(socket, buildPlainAuthCommand(message.username, message.password), [235]);
+        if (message.username || message.password) {
+            await authenticateSmtp(socket, ehloResponse, message.username, message.password);
         }
 
         await writeSmtpCommand(socket, `MAIL FROM:<${message.from}>`, [250]);
@@ -478,6 +490,39 @@ async function writeSmtpCommand(socket: SmtpSocket, command: string, expectedCod
 
 function hasSmtpCapability(response: string[], capability: string): boolean {
     return response.some((line) => line.toUpperCase().includes(capability));
+}
+
+async function authenticateSmtp(
+    socket: SmtpSocket,
+    ehloResponse: string[],
+    username: string | undefined,
+    password: string | undefined
+): Promise<void> {
+    if (!username || !password) {
+        throw new Error('SMTP username and password must be configured together');
+    }
+
+    if (hasSmtpAuthMechanism(ehloResponse, 'PLAIN')) {
+        await writeSmtpCommand(socket, buildPlainAuthCommand(username, password), [235]);
+        return;
+    }
+
+    if (hasSmtpAuthMechanism(ehloResponse, 'LOGIN')) {
+        await writeSmtpCommand(socket, 'AUTH LOGIN', [334]);
+        await writeSmtpCommand(socket, Buffer.from(username, 'utf8').toString('base64'), [334]);
+        await writeSmtpCommand(socket, Buffer.from(password, 'utf8').toString('base64'), [235]);
+        return;
+    }
+
+    throw new Error('SMTP server does not advertise AUTH PLAIN or AUTH LOGIN');
+}
+
+function hasSmtpAuthMechanism(response: string[], mechanism: 'PLAIN' | 'LOGIN'): boolean {
+    return response.some((line) => {
+        const authDeclaration = line.match(/^\d{3}(?:-|\s)+AUTH(?:=|\s)+(.+)$/i)?.[1];
+
+        return authDeclaration?.split(/\s+/).some((item) => item.toUpperCase() === mechanism) ?? false;
+    });
 }
 
 function buildPlainAuthCommand(username: string, password: string): string {
