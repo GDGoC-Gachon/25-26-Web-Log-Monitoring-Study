@@ -19,7 +19,7 @@ export function buildServerErrorEsqlQuery(minutes: number = config.detection.win
     return [
         `FROM ${config.elasticsearch.indexPattern}`,
         `| WHERE @timestamp > NOW() - ${minutes}m`,
-        '| WHERE path LIKE "/api/v1/%" OR path LIKE "/api/%"',
+        '| WHERE path LIKE "/api/v1/*" OR path LIKE "/api/*"',
         '| KEEP @timestamp, path, protocol_status',
         '| SORT @timestamp DESC'
     ].join(' ');
