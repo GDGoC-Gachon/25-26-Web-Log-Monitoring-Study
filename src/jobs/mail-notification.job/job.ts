@@ -13,7 +13,7 @@ import type {
 } from '../../types/detection.ts';
 import { logger as defaultLogger } from '../../utils/logger.ts';
 
-type EmailContent = Pick<SmtpMessage, 'from' | 'to' | 'subject' | 'text' | 'html'>;
+type EmailContent = Pick<SmtpMessage, 'from' | 'to' | 'bcc' | 'subject' | 'text' | 'html'>;
 
 type MailTemplate = {
     fileName: string;
@@ -136,7 +136,8 @@ export async function mailNotification({
     let hadFailure = false;
 
     for (const alert of alerts) {
-        const alertRecipients = resolveDetectionRecipients([alert], smtp.recipients);
+        const alertRecipientGroups = resolveDetectionRecipientGroups([alert], smtp.recipients);
+        const alertRecipients = [...alertRecipientGroups.bcc, ...alertRecipientGroups.to];
 
         for (const recipient of alertRecipients) {
             notifiedRecipients.add(recipient);
@@ -157,7 +158,8 @@ export async function mailNotification({
         try {
             email = await buildTemplatedDetectionAlertEmail(alert, {
                 from: smtp.from,
-                to: alertRecipients
+                to: alertRecipientGroups.to,
+                bcc: alertRecipientGroups.bcc
             });
         } catch (error) {
             hadFailure = true;
@@ -233,11 +235,21 @@ export function resolveDetectionRecipients(
     alerts: DetectionAlert[],
     recipients: DetectionRecipient[]
 ): string[] {
-    const recipientEmails: string[] = [];
+    const recipientGroups = resolveDetectionRecipientGroups(alerts, recipients);
+
+    return [...recipientGroups.bcc, ...recipientGroups.to];
+}
+
+export function resolveDetectionRecipientGroups(
+    alerts: DetectionAlert[],
+    recipients: DetectionRecipient[]
+): { to: string[]; bcc: string[] } {
+    const to = new Set<string>();
+    const bcc = new Set<string>();
 
     for (const recipient of recipients) {
         if (recipient.scope === 'all') {
-            recipientEmails.push(recipient.email);
+            bcc.add(recipient.email);
             continue;
         }
 
@@ -245,16 +257,23 @@ export function resolveDetectionRecipients(
         const shouldReceive = alerts.some((alert) => getAlertDomains(alert).some((domain) => recipientDomains.has(domain)));
 
         if (shouldReceive) {
-            recipientEmails.push(recipient.email);
+            to.add(recipient.email);
         }
     }
 
-    return Array.from(new Set(recipientEmails));
+    for (const recipient of bcc) {
+        to.delete(recipient);
+    }
+
+    return {
+        to: Array.from(to),
+        bcc: Array.from(bcc)
+    };
 }
 
 export function buildDetectionAlertEmail(
     alerts: DetectionAlert[],
-    emailOptions: Pick<EmailContent, 'from' | 'to'>
+    emailOptions: Pick<EmailContent, 'from' | 'to' | 'bcc'>
 ): EmailContent {
     return {
         ...emailOptions,
@@ -269,7 +288,7 @@ export function buildDetectionAlertEmail(
 
 export async function buildTemplatedDetectionAlertEmail(
     alert: DetectionAlert,
-    emailOptions: Pick<EmailContent, 'from' | 'to'>
+    emailOptions: Pick<EmailContent, 'from' | 'to' | 'bcc'>
 ): Promise<EmailContent> {
     const template = mailTemplates[alert.type];
     const templateContent = await loadMailTemplate(template.fileName);
@@ -300,7 +319,7 @@ export async function sendSmtpMessage(message: SmtpMessage): Promise<void> {
 
         await writeSmtpCommand(socket, `MAIL FROM:<${message.from}>`, [250]);
 
-        for (const recipient of message.to) {
+        for (const recipient of new Set([...message.to, ...(message.bcc ?? [])])) {
             await writeSmtpCommand(socket, `RCPT TO:<${recipient}>`, [250, 251]);
         }
 
@@ -532,7 +551,7 @@ function buildPlainAuthCommand(username: string, password: string): string {
 export function formatSmtpData(message: SmtpMessage): string {
     const headers = [
         `From: ${message.from}`,
-        `To: ${message.to.join(', ')}`,
+        `To: ${message.to.length > 0 ? message.to.join(', ') : 'undisclosed-recipients:;'}`,
         `Subject: ${encodeMimeHeader(message.subject)}`
     ];
 

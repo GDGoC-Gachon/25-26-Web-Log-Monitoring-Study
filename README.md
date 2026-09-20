@@ -112,7 +112,7 @@ npm test
 | `SMTP_USERNAME` | SMTP 인증 사용자명 |
 | `SMTP_PASSWORD` | SMTP 인증 비밀번호 |
 | `SMTP_FROM` | 발신자 메일 주소 |
-| `SMTP_TO` | 모든 탐지 메일을 받는 superuser 수신자 목록 |
+| `SMTP_TO` | 모든 탐지 메일을 BCC로 받는 superuser 수신자 목록 |
 | `SMTP_DOMAIN_RECIPIENTS` | `email:domain1\|domain2;email2:domain3` 형식의 현재 정적 domain별 수신자 목록 |
 | `LOG_LEVEL` | 로그 레벨 |
 
@@ -125,5 +125,6 @@ npm test
 - [2026-07-11 오류 및 기능개선 사항 반영 기록](Docs/feedback/2026-07-11-error-and-feature-improvements.md)
 - [탐지·알림 회귀 QA 계획](Docs/test-plans/2026-07-06-detection-regression.md)
 - [후속 개발 계획](Docs/PLANS.md)
+- [Kibana 서비스 Space 접근 제어](Docs/kibana-space-access.md)
 - ES\|QL 문법: <https://www.elastic.co/docs/reference/query-languages/esql>
 - Elasticsearch Query API: <https://www.elastic.co/docs/api/doc/elasticsearch/group/endpoint-query>
