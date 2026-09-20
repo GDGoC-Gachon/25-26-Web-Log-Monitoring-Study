@@ -92,6 +92,9 @@ npm test
 | `ELASTICSEARCH_TIMEOUT_MS` | Elasticsearch 요청 타임아웃(ms) |
 | `ELASTIC_USERNAME` | Basic Auth 사용자명 |
 | `ELASTIC_PASSWORD` | Basic Auth 비밀번호 |
+| `ELASTIC_USER_API_USERNAME` | `GET /_security/user` 전용 최소 권한 서비스 계정 사용자명 |
+| `ELASTIC_USER_API_PASSWORD` | 위 서비스 계정 비밀번호 |
+| `ELASTIC_USER_API_TIMEOUT_MS` | Elastic 사용자 조회 타임아웃(ms). 생략 시 `ELASTICSEARCH_TIMEOUT_MS` |
 | `JOBS_POLLING_MINUTES` | 탐지 주기(분) |
 | `DETECTION_WINDOW_MINUTES` | 한 번의 탐지에서 조회할 최근 시간 범위(분) |
 | `BRUTE_FORCE_MAX_FAILURES` | 무차별 대입 판단용 실패 응답 수 기준 |
@@ -112,11 +115,11 @@ npm test
 | `SMTP_USERNAME` | SMTP 인증 사용자명 |
 | `SMTP_PASSWORD` | SMTP 인증 비밀번호 |
 | `SMTP_FROM` | 발신자 메일 주소 |
-| `SMTP_TO` | 모든 탐지 메일을 받는 superuser 수신자 목록 |
-| `SMTP_DOMAIN_RECIPIENTS` | `email:domain1\|domain2;email2:domain3` 형식의 현재 정적 domain별 수신자 목록 |
 | `LOG_LEVEL` | 로그 레벨 |
 
 `WEB_ERROR_MIN_REQUESTS`와 `SERVER_ERROR_MIN_REQUESTS`는 서로 독립적으로 설정하며, 생략하면 각각 `20`을 사용합니다. 두 변수는 코드와 `.env.example`에 반영되어 있습니다.
+
+메일 수신자는 매 폴링에서 Elastic의 `GET /_security/user`로 조회합니다. `enabled=true`와 유효한 `email`을 가진 사용자만 후보가 되며, 탐지 도메인과 정확히 일치하는 role은 `To`, `superuser` role은 SMTP envelope BCC로 사용합니다. 사용자 조회 실패나 타임아웃에는 정적 매핑이나 캐시로 대체하지 않고 해당 폴링의 메일 발송을 보류합니다.
 
 ## 참고 문서
 

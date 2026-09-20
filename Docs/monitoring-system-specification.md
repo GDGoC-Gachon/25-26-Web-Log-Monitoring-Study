@@ -50,8 +50,8 @@
 
 | 역할 | 현재 | 목표 권한 |
 |------|------|-----------|
-| 운영자(superuser) | `.env`의 `SMTP_TO` 수신자 | 전체 탐지 조회, 대상·사용자 관리, 차단 승인·해제, 감사 로그 조회 |
-| 서비스 사용자 | `.env`의 `SMTP_DOMAIN_RECIPIENTS` 수신자 | Elastic 사용자 role 또는 승인된 매핑으로 허용된 `hostDomain`의 알림과 대시보드만 조회 |
+| 운영자(superuser) | Elastic `superuser` role의 활성·유효 이메일 사용자. SMTP envelope BCC로 수신 | 전체 탐지 조회, 대상·사용자 관리, 차단 승인·해제, 감사 로그 조회 |
+| 서비스 사용자 | 탐지 `hostDomain`과 정확히 같은 Elastic role의 활성·유효 이메일 사용자. SMTP `To`로 수신 | 허용된 `hostDomain`의 알림과 대시보드만 조회 |
 | 미인증 사용자 | 해당 없음 | 관제 데이터 접근 불가 |
 
 ## 5. 용어
@@ -112,7 +112,7 @@ flowchart LR
 | DDoS | `clientIp` 전체 + `hostDomain`별 부가 집계 | 300회 이상 | 여러 `hostDomain` 가능 | 부분 구현 |
 | 웹 오류 | `hostDomain` | 요청 20건 이상이고 4xx 비율 10% 이상 | 단일 `hostDomain` | QA 필요 |
 | 서버 오류 | `apiDomain` | API 경로 요청 20건 이상이고 5xx 비율 5% 이상 | `hostDomain`을 보존하지 않음 | QA 필요 |
-| 민감 경로 | `clientIp + hostDomain + path + matchedPath` | 설정 경로와 일치 또는 하위 경로 | 로그에 존재할 때 단일 `hostDomain` | 부분 구현 |
+| 민감 경로 | `clientIp + hostDomain` | 설정 경로와 일치 또는 하위 경로. 경로는 중복 제거해 표시하고 요청 수는 원본 합계 | 로그에 존재할 때 단일 `hostDomain` | 자동 테스트 완료, 실서버 QA 필요 |
 
 표의 값은 코드 기본값이다. 4xx 최소 요청 수는 `WEB_ERROR_MIN_REQUESTS`, 5xx 최소 요청 수는 `SERVER_ERROR_MIN_REQUESTS`로 각각 변경할 수 있다. 실제 배포 값은 환경 변수로 변경할 수 있으며 시연의 4,751건을 제품 임계값으로 사용하지 않는다.
 
@@ -126,7 +126,7 @@ flowchart LR
 | GAP-004 | 1분 폴링이 최근 5분을 반복 조회하지만 탐지 상태와 cooldown이 없다. | 같은 로그의 반복 알림 가능 | P0 |
 | GAP-005 | 한 Job의 예외가 뒤 Job 실행과 해당 주기의 메일 발송을 중단시킬 수 있고 비동기 폴링 중첩 방지가 없다. | 부분 장애가 전체 감시 공백으로 확대 | P1 |
 | GAP-006 | 5xx의 `domain`은 `hostDomain`이 아니라 API 경로 세그먼트다. | 테넌트 권한·메일 라우팅 의미 충돌 | P0 |
-| GAP-007 | 현재는 `.env`의 정적 도메인 수신자 매핑만 사용하며 PDF에 제시된 Elastic 사용자 API를 조회하지 않는다. | 사용자·도메인 수신 범위 자동 동기화 요구 미충족 | P1 |
+| GAP-007 | 2026-09-21 해결. 매 폴링 `GET /_security/user`를 조회해 정확한 domain role은 `To`, `superuser`는 envelope BCC로 라우팅하고 실패 시 발송을 보류한다. | 운영 API 권한과 실제 SMTP 수신 QA 잔여 | 해결(P1 이력) |
 | GAP-008 | 2026-07-13 해결. 과거에는 최소 표본 수 없이 오류율만 비교했으나, 현재는 집계 키별 최소 요청 수 기본값 20을 Job과 최종 alert 변환에 공통 적용한다. | 자동 테스트 완료, 실서버 QA 잔여 | 해결(P0 이력) |
 | GAP-009 | 현재 메일은 plain text 한 종류이며 여러 탐지의 정보 계층과 시각적 구분이 없다. | 경고 파악과 대응 지연 | P1 |
 

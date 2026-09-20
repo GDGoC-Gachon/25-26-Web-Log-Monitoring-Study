@@ -32,7 +32,7 @@ flowchart TD
     SERVER -->|failure| JOB_FAIL3["monitoring_job_failed\ncontinue"]
     JOB_FAIL3 --> SENSITIVE
 
-    SENSITIVE -->|success| WEB["webErrorJob()\n4xx rate by host domain"]
+    SENSITIVE -->|success| WEB["webErrorJob()\n4xx rate by host domain\nincident key: clientIp + hostDomain"]
     SENSITIVE -->|failure| JOB_FAIL4["monitoring_job_failed\ncontinue"]
     JOB_FAIL4 --> WEB
 
@@ -57,11 +57,13 @@ flowchart TD
     ALERTS --> MAIL["mailNotification({ alerts })"]
     MAIL --> NO_ALERTS{"alerts.length === 0?"}
     NO_ALERTS -->|yes| NO_SEND["mail_notification_skipped\nno SMTP connection"]
-    NO_ALERTS -->|no| SMTP_CONFIG{"SMTP host, sender, recipients?"}
+    NO_ALERTS -->|no| SMTP_CONFIG{"SMTP host and sender?"}
     SMTP_CONFIG -->|no| CONFIG_SKIP["mail_notification_skipped\nwarn and return"]
-    SMTP_CONFIG -->|yes| PER_ALERT["for each alert"]
+    SMTP_CONFIG -->|yes| USER_API["GET /_security/user\nactive + valid email only"]
+    USER_API -->|failure or timeout| USER_LOOKUP_FAIL["mail_notification_user_lookup_failed\nhold SMTP delivery"]
+    USER_API -->|success| PER_ALERT["for each alert"]
 
-    PER_ALERT --> RECIPIENTS["resolveDetectionRecipients()"]
+    PER_ALERT --> RECIPIENTS["exact domain role -> To\nsuperuser -> envelope BCC"]
     RECIPIENTS --> TEMPLATE["buildTemplatedDetectionAlertEmail()"]
     TEMPLATE --> SMTP["sendSmtpMessage()"]
     SMTP -->|success| SENT["mail_notification_sent"]
@@ -69,6 +71,7 @@ flowchart TD
 
     NO_SEND --> COMPLETE["mail_notification_completed\nmonitoring_poll_completed"]
     CONFIG_SKIP --> COMPLETE
+    USER_LOOKUP_FAIL --> COMPLETE
     SENT --> COMPLETE
     MAIL_FAIL --> COMPLETE
     COMPLETE --> END["pollingInProgress = false"]
@@ -78,7 +81,7 @@ flowchart TD
     classDef error fill:#ffe8e8,stroke:#b42318,color:#5f1111;
     class DDoS,BRUTE,SERVER,SENSITIVE,WEB job;
     class MAIL,RECIPIENTS,TEMPLATE,SMTP,SENT mail;
-    class JOB_FAIL1,JOB_FAIL2,JOB_FAIL3,JOB_FAIL4,JOB_FAIL5,CONFIG_SKIP,MAIL_FAIL error;
+    class JOB_FAIL1,JOB_FAIL2,JOB_FAIL3,JOB_FAIL4,JOB_FAIL5,CONFIG_SKIP,USER_LOOKUP_FAIL,MAIL_FAIL error;
 ```
 
 ## SMTP Sequence
@@ -90,6 +93,7 @@ sequenceDiagram
     participant Job as Detection Job
     participant ES as Elasticsearch
     participant Mail as mailNotification
+    participant Users as Elastic user API
     participant Server as SMTP server
 
     App->>App: runPollingCycle()
@@ -112,8 +116,13 @@ sequenceDiagram
     else SMTP configuration incomplete
         Mail-->>App: mail_notification_skipped
     else alerts available
+        Mail->>Users: GET /_security/user
+        alt user lookup fails or times out
+            Users-->>Mail: failure
+            Mail-->>App: mail_notification_user_lookup_failed
+        else user lookup succeeds
         loop each alert
-            Mail->>Mail: resolve recipients
+            Mail->>Mail: exact domain role -> To; superuser -> envelope BCC
             Mail->>Mail: render HTML + plain-text fallback
             Mail->>Server: connect + EHLO
             opt STARTTLS advertised and secure=false
@@ -129,10 +138,11 @@ sequenceDiagram
                 end
                 Server-->>Mail: 235 authenticated
             end
-            Mail->>Server: MAIL FROM / RCPT TO / DATA
+            Mail->>Server: MAIL FROM / RCPT TO (To + BCC) / DATA
             Server-->>Mail: 250 accepted
             Mail->>Server: QUIT
             Mail-->>App: mail_notification_sent
+        end
         end
     end
 
