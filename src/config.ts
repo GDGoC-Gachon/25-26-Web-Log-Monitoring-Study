@@ -34,6 +34,17 @@ export const config = {
             return process.env.ELASTICSEARCH_INDEX_PATTERN ?? 'iis-*';
         }
     },
+    elasticUserApi: {
+        get username() {
+            return process.env.ELASTIC_USER_API_USERNAME;
+        },
+        get password() {
+            return process.env.ELASTIC_USER_API_PASSWORD;
+        },
+        get requestTimeoutMs() {
+            return Number(process.env.ELASTIC_USER_API_TIMEOUT_MS ?? config.elasticsearch.requestTimeoutMs);
+        }
+    },
     detection: {
         get windowMinutes() {
             return Number(process.env.DETECTION_WINDOW_MINUTES ?? 5);
@@ -93,12 +104,6 @@ export const config = {
         },
         get from() {
             return process.env.SMTP_FROM;
-        },
-        get to() {
-            return process.env.SMTP_TO;
-        },
-        get domainRecipients() {
-            return process.env.SMTP_DOMAIN_RECIPIENTS;
         }
     }
 };

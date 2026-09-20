@@ -7,10 +7,15 @@ import { config } from '../../config.ts';
 import type {
     DetectionAlert,
     DetectionLogger,
-    DetectionRecipient,
     DetectionType,
     SmtpMessage
 } from '../../types/detection.ts';
+import {
+    elasticUserClient,
+    fetchElasticNotificationUsers,
+    type ElasticNotificationUser,
+    type ElasticUserApiClient
+} from '../../utils/elastic-user.client.ts';
 import { logger as defaultLogger } from '../../utils/logger.ts';
 
 type EmailContent = Pick<SmtpMessage, 'from' | 'to' | 'subject' | 'text' | 'html'>;
@@ -28,7 +33,6 @@ type MailNotificationSmtpConfig = {
     username?: string | undefined;
     password?: string | undefined;
     from?: string | undefined;
-    recipients: DetectionRecipient[];
 };
 
 type MailNotificationOptions = {
@@ -36,6 +40,7 @@ type MailNotificationOptions = {
     smtp?: MailNotificationSmtpConfig;
     logger?: DetectionLogger;
     sendMail?: (message: SmtpMessage) => Promise<void>;
+    userClient?: ElasticUserApiClient;
 };
 
 type MailNotificationResult = {
@@ -44,6 +49,11 @@ type MailNotificationResult = {
 };
 
 type SmtpSocket = net.Socket | tls.TLSSocket;
+
+type AlertRecipients = {
+    to: string[];
+    bcc: string[];
+};
 
 const mailFormDirectory = new URL('../../mailForm/', import.meta.url);
 const templateContents = new Map<string, Promise<string>>();
@@ -81,7 +91,7 @@ const mailTemplates: Record<DetectionType, MailTemplate> = {
         placeholders: (alert) => ({
             '#TargetDomain#': displayValue(alert.domain),
             '#AttackerIp#': displayValue(alert.clientIp),
-            '#TargetPath#': displayValue(alert.path),
+            '#TargetPath#': formatSensitivePaths(alert),
             '#AccessCount#': displayNumber(alert.count)
         })
     },
@@ -99,7 +109,8 @@ export async function mailNotification({
     alerts = [],
     smtp = getDefaultSmtpConfig(),
     logger = defaultLogger,
-    sendMail = sendSmtpMessage
+    sendMail = sendSmtpMessage,
+    userClient = elasticUserClient
 }: MailNotificationOptions = {}): Promise<MailNotificationResult> {
     if (alerts.length === 0) {
         logger.info?.({
@@ -115,19 +126,33 @@ export async function mailNotification({
         };
     }
 
-    const recipients = resolveDetectionRecipients(alerts, smtp.recipients);
-
-    if (!smtp.host || !smtp.from || smtp.recipients.length === 0) {
+    if (!smtp.host || !smtp.from) {
         logger.warn({
             event: 'mail_notification_skipped',
-            reason: 'SMTP host, sender, or recipients are not configured',
+            reason: 'SMTP host or sender is not configured',
             alertCount: alerts.length,
-            recipientCount: recipients.length
+            recipientCount: 0
         });
 
         return {
             sent: false,
-            recipients
+            recipients: []
+        };
+    }
+
+    let users: ElasticNotificationUser[];
+    try {
+        users = await fetchElasticNotificationUsers(userClient);
+    } catch {
+        logMailError(logger, {
+            event: 'mail_notification_user_lookup_failed',
+            reason: 'Elastic user lookup failed; SMTP delivery held',
+            alertCount: alerts.length
+        });
+
+        return {
+            sent: false,
+            recipients: []
         };
     }
 
@@ -136,13 +161,13 @@ export async function mailNotification({
     let hadFailure = false;
 
     for (const alert of alerts) {
-        const alertRecipients = resolveDetectionRecipients([alert], smtp.recipients);
+        const alertRecipients = resolveElasticRoleRecipients(alert, users);
 
-        for (const recipient of alertRecipients) {
+        for (const recipient of [...alertRecipients.to, ...alertRecipients.bcc]) {
             notifiedRecipients.add(recipient);
         }
 
-        if (alertRecipients.length === 0) {
+        if (alertRecipients.to.length === 0 && alertRecipients.bcc.length === 0) {
             logger.warn({
                 event: 'mail_notification_skipped',
                 reason: 'No recipients match the detection alert',
@@ -157,7 +182,7 @@ export async function mailNotification({
         try {
             email = await buildTemplatedDetectionAlertEmail(alert, {
                 from: smtp.from,
-                to: alertRecipients
+                to: alertRecipients.to
             });
         } catch (error) {
             hadFailure = true;
@@ -165,7 +190,7 @@ export async function mailNotification({
                 event: 'mail_notification_template_failed',
                 message: error instanceof Error ? error.message : 'Unknown mail template failure',
                 alertType: alert.type,
-                recipientCount: alertRecipients.length
+                recipientCount: alertRecipients.to.length + alertRecipients.bcc.length
             });
             continue;
         }
@@ -177,13 +202,16 @@ export async function mailNotification({
                 secure: smtp.secure,
                 username: smtp.username,
                 password: smtp.password,
+                bcc: alertRecipients.bcc,
                 ...email
             });
             sentCount += 1;
             logger.info?.({
                 event: 'mail_notification_sent',
                 alertType: alert.type,
-                recipientCount: alertRecipients.length
+                recipientCount: alertRecipients.to.length + alertRecipients.bcc.length,
+                toRecipientCount: alertRecipients.to.length,
+                bccRecipientCount: alertRecipients.bcc.length
             });
         } catch (error) {
             hadFailure = true;
@@ -191,7 +219,7 @@ export async function mailNotification({
                 event: 'mail_notification_failed',
                 message: error instanceof Error ? error.message : 'Unknown SMTP failure',
                 alertType: alert.type,
-                recipientCount: alertRecipients.length
+                recipientCount: alertRecipients.to.length + alertRecipients.bcc.length
             });
         }
     }
@@ -200,56 +228,6 @@ export async function mailNotification({
         sent: sentCount > 0 && !hadFailure,
         recipients: Array.from(notifiedRecipients)
     };
-}
-
-export function parseDetectionRecipients(
-    superuserRecipients: string | undefined = '',
-    domainRecipients: string | undefined = ''
-): DetectionRecipient[] {
-    const superusers = splitCsv(superuserRecipients).map((email) => ({
-        email,
-        scope: 'all' as const
-    }));
-
-    const serviceUsers = domainRecipients
-        .split(';')
-        .map((entry) => entry.trim())
-        .filter(Boolean)
-        .map((entry) => {
-            const [email = '', domains = ''] = entry.split(':');
-
-            return {
-                email: email.trim(),
-                scope: 'domains' as const,
-                domains: domains.split(/[|,]/).map((domain) => domain.trim()).filter(Boolean)
-            };
-        })
-        .filter((recipient) => recipient.email.length > 0 && recipient.domains.length > 0);
-
-    return [...superusers, ...serviceUsers];
-}
-
-export function resolveDetectionRecipients(
-    alerts: DetectionAlert[],
-    recipients: DetectionRecipient[]
-): string[] {
-    const recipientEmails: string[] = [];
-
-    for (const recipient of recipients) {
-        if (recipient.scope === 'all') {
-            recipientEmails.push(recipient.email);
-            continue;
-        }
-
-        const recipientDomains = new Set(recipient.domains);
-        const shouldReceive = alerts.some((alert) => getAlertDomains(alert).some((domain) => recipientDomains.has(domain)));
-
-        if (shouldReceive) {
-            recipientEmails.push(recipient.email);
-        }
-    }
-
-    return Array.from(new Set(recipientEmails));
 }
 
 export function buildDetectionAlertEmail(
@@ -300,7 +278,7 @@ export async function sendSmtpMessage(message: SmtpMessage): Promise<void> {
 
         await writeSmtpCommand(socket, `MAIL FROM:<${message.from}>`, [250]);
 
-        for (const recipient of message.to) {
+        for (const recipient of smtpEnvelopeRecipients(message)) {
             await writeSmtpCommand(socket, `RCPT TO:<${recipient}>`, [250, 251]);
         }
 
@@ -320,16 +298,8 @@ function getDefaultSmtpConfig(): MailNotificationSmtpConfig {
         secure: config.smtp.secure,
         username: config.smtp.username,
         password: config.smtp.password,
-        from: config.smtp.from,
-        recipients: parseDetectionRecipients(config.smtp.to, config.smtp.domainRecipients)
+        from: config.smtp.from
     };
-}
-
-function splitCsv(value: string | undefined): string[] {
-    return (value ?? '')
-        .split(',')
-        .map((item) => item.trim())
-        .filter(Boolean);
 }
 
 function getAlertDomains(alert: DetectionAlert): string[] {
@@ -337,6 +307,27 @@ function getAlertDomains(alert: DetectionAlert): string[] {
         ...(alert.domain ? [alert.domain] : []),
         ...(alert.domainCounts?.map(({ domain }) => domain) ?? [])
     ];
+}
+
+export function resolveElasticRoleRecipients(
+    alert: DetectionAlert,
+    users: ElasticNotificationUser[]
+): AlertRecipients {
+    const bcc = uniqueEmails(users
+        .filter((user) => user.roles.includes('superuser'))
+        .map((user) => user.email));
+    const bccSet = new Set(bcc);
+    const alertDomains = new Set(getAlertDomains(alert));
+    const to = uniqueEmails(users
+        .filter((user) => !bccSet.has(user.email))
+        .filter((user) => user.roles.some((role) => alertDomains.has(role)))
+        .map((user) => user.email));
+
+    return { to, bcc };
+}
+
+function uniqueEmails(emails: string[]): string[] {
+    return Array.from(new Set(emails));
 }
 
 function displayValue(value: string | undefined): string {
@@ -355,6 +346,14 @@ function formatDdosDomains(alert: DetectionAlert): string {
     }
 
     return domainCounts.map(({ domain, count }) => `${domain} (${count})`).join(', ');
+}
+
+function formatSensitivePaths(alert: DetectionAlert): string {
+    if (alert.paths && alert.paths.length > 0) {
+        return alert.paths.join(', ');
+    }
+
+    return displayValue(alert.path);
 }
 
 function loadMailTemplate(fileName: string): Promise<string> {
@@ -390,7 +389,7 @@ function formatDetectionAlert(alert: DetectionAlert): string {
     const details = [
         alert.domain ? `domain=${alert.domain}` : undefined,
         alert.clientIp ? `clientIp=${alert.clientIp}` : undefined,
-        alert.path ? `path=${alert.path}` : undefined,
+        alert.path || alert.paths ? `path=${formatSensitivePaths(alert)}` : undefined,
         typeof alert.count === 'number' ? `count=${alert.count}` : undefined,
         typeof alert.threshold === 'number' ? `threshold=${alert.threshold}` : undefined,
         typeof alert.errorRatePercent === 'number' ? `errorRatePercent=${alert.errorRatePercent}` : undefined
@@ -532,7 +531,7 @@ function buildPlainAuthCommand(username: string, password: string): string {
 export function formatSmtpData(message: SmtpMessage): string {
     const headers = [
         `From: ${message.from}`,
-        `To: ${message.to.join(', ')}`,
+        `To: ${message.to.length > 0 ? message.to.join(', ') : 'undisclosed-recipients:;'}`,
         `Subject: ${encodeMimeHeader(message.subject)}`
     ];
 
@@ -561,6 +560,10 @@ export function formatSmtpData(message: SmtpMessage): string {
         escapeSmtpData(message.html),
         `--${boundary}--`
     ].join('\r\n');
+}
+
+function smtpEnvelopeRecipients(message: SmtpMessage): string[] {
+    return uniqueEmails([...message.to, ...(message.bcc ?? [])]);
 }
 
 function escapeSmtpData(text: string): string {
