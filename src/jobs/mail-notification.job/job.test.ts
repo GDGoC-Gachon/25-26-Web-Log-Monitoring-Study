@@ -6,11 +6,13 @@ import {
     buildTemplatedDetectionAlertEmail,
     formatSmtpData,
     mailNotification,
+    resolveElasticRoleRecipients
     parseDetectionRecipients,
     resolveDetectionRecipientGroups,
     resolveDetectionRecipients
 } from './job.ts';
 import type { DetectionAlert, SmtpMessage } from '../../types/detection.ts';
+import type { ElasticUserApiClient } from '../../utils/elastic-user.client.ts';
 
 const bruteForceAlert: DetectionAlert = {
     type: 'BRUTE_FORCE',
@@ -66,20 +68,50 @@ const smtpConfig = {
     host: 'smtp.gdgoc.net',
     port: 587,
     secure: false,
-    from: 'monitor@gdgoc.net',
-    recipients: parseDetectionRecipients(
-        'superuser@gdgoc.net',
-        'shop-owner@gdgoc.net:shop.gdgoc.net;api-owner@gdgoc.net:api.gdgoc.net'
-    )
+    from: 'monitor@gdgoc.net'
 };
 
-describe('resolveDetectionRecipients', () => {
-    it('sends DDoS alerts to service users whose domains are in the domain count', () => {
-        assert.deepEqual(resolveDetectionRecipients([ddosAlert], smtpConfig.recipients), [
-            'superuser@gdgoc.net',
-            'shop-owner@gdgoc.net',
-            'api-owner@gdgoc.net'
+const notificationUsers = {
+    'superuser@gdgoc.net': {
+        email: 'superuser@gdgoc.net',
+        enabled: true,
+        roles: ['superuser']
+    },
+    'shop-owner@gdgoc.net': {
+        email: 'shop-owner@gdgoc.net',
+        enabled: true,
+        roles: ['shop.gdgoc.net']
+    },
+    'api-owner@gdgoc.net': {
+        email: 'api-owner@gdgoc.net',
+        enabled: true,
+        roles: ['api.gdgoc.net']
+    }
+};
+
+function createElasticUserClient(users: unknown = notificationUsers): ElasticUserApiClient {
+    return {
+        transport: {
+            async request() {
+                return { body: users };
+            }
+        }
+    };
+}
+
+describe('resolveElasticRoleRecipients', () => {
+    it('uses exact domain roles for To and superuser roles for envelope BCC', () => {
+        const recipients = resolveElasticRoleRecipients(ddosAlert, [
+            { email: 'superuser@gdgoc.net', roles: ['superuser', 'shop.gdgoc.net'] },
+            { email: 'shop-owner@gdgoc.net', roles: ['shop.gdgoc.net'] },
+            { email: 'api-owner@gdgoc.net', roles: ['api.gdgoc.net'] },
+            { email: 'near-match@gdgoc.net', roles: ['api.gdgoc.net.evil'] }
         ]);
+
+        assert.deepEqual(recipients, {
+            to: ['shop-owner@gdgoc.net', 'api-owner@gdgoc.net'],
+            bcc: ['superuser@gdgoc.net']
+        });
     });
 
     it('keeps superusers as BCC recipients while exposing only matching service users', () => {
@@ -204,6 +236,7 @@ describe('mailNotification', () => {
         const result = await mailNotification({
             alerts: templateAlerts,
             smtp: smtpConfig,
+            userClient: createElasticUserClient(),
             logger: {
                 warn() {},
                 info(details: unknown) {
@@ -217,7 +250,7 @@ describe('mailNotification', () => {
 
         assert.deepEqual(result, {
             sent: true,
-            recipients: ['superuser@gdgoc.net', 'shop-owner@gdgoc.net', 'api-owner@gdgoc.net']
+            recipients: ['shop-owner@gdgoc.net', 'superuser@gdgoc.net', 'api-owner@gdgoc.net']
         });
         assert.equal(sent.length, 5);
         assert.deepEqual(sent.map((message) => ({ to: message.to, bcc: message.bcc })), [
@@ -241,6 +274,91 @@ describe('mailNotification', () => {
         );
     });
 
+    it('uses one Elastic user lookup, exact role routing, and a headerless envelope BCC', async () => {
+        const sent: SmtpMessage[] = [];
+        const requests: unknown[] = [];
+        const userClient: ElasticUserApiClient = {
+            transport: {
+                async request(request) {
+                    requests.push(request);
+                    return {
+                        body: {
+                            'admin@gdgoc.net': { email: 'admin@gdgoc.net', enabled: true, roles: ['superuser'] },
+                            'elastic-owner@gdgoc.net': { email: 'elastic-owner@gdgoc.net', enabled: true, roles: ['elastic.gdgoc.net'] },
+                            'disabled@gdgoc.net': { email: 'disabled@gdgoc.net', enabled: false, roles: ['elastic.gdgoc.net'] },
+                            'invalid@gdgoc.net': { email: 'not-an-email', enabled: true, roles: ['elastic.gdgoc.net'] },
+                            'near-match@gdgoc.net': { email: 'near-match@gdgoc.net', enabled: true, roles: ['elastic.gdgoc.net.example'] }
+                        }
+                    };
+                }
+            }
+        };
+        const alert: DetectionAlert = {
+            type: 'SENSITIVE_PATH',
+            domain: 'elastic.gdgoc.net',
+            clientIp: '34.11.167.212',
+            path: '/.env',
+            paths: ['/.env', '/admin/.env', '/admin/phpinfo.php'],
+            count: 3,
+            reason: 'Grouped sensitive path incident'
+        };
+
+        const result = await mailNotification({
+            alerts: [alert],
+            smtp: smtpConfig,
+            userClient,
+            logger: { warn() {} },
+            sendMail: async (message) => {
+                sent.push(message);
+            }
+        });
+
+        assert.deepEqual(result, {
+            sent: true,
+            recipients: ['elastic-owner@gdgoc.net', 'admin@gdgoc.net']
+        });
+        assert.equal(requests.length, 1);
+        assert.deepEqual(requests[0], { method: 'GET', path: '/_security/user' });
+        assert.equal(sent.length, 1);
+        assert.deepEqual(sent[0]?.to, ['elastic-owner@gdgoc.net']);
+        assert.deepEqual(sent[0]?.bcc, ['admin@gdgoc.net']);
+        assert.match(sent[0]?.html ?? '', /\/.env, \/admin\/\.env, \/admin\/phpinfo\.php/);
+        assert.doesNotMatch(formatSmtpData(sent[0]!), /^Bcc:/mi);
+    });
+
+    it('holds all SMTP delivery when the Elastic user lookup fails without logging its error', async () => {
+        const errors: unknown[] = [];
+
+        const result = await mailNotification({
+            alerts: [bruteForceAlert],
+            smtp: smtpConfig,
+            userClient: {
+                transport: {
+                    async request() {
+                        throw new Error('Elastic request timed out with password=must-not-log');
+                    }
+                }
+            },
+            logger: {
+                warn() {},
+                error(details: unknown) {
+                    errors.push(details);
+                }
+            },
+            sendMail: async () => {
+                assert.fail('sendMail should not run after an Elastic user lookup failure');
+            }
+        });
+
+        assert.deepEqual(result, { sent: false, recipients: [] });
+        assert.deepEqual(errors, [{
+            event: 'mail_notification_user_lookup_failed',
+            reason: 'Elastic user lookup failed; SMTP delivery held',
+            alertCount: 1
+        }]);
+        assert.doesNotMatch(JSON.stringify(errors), /password|must-not-log/i);
+    });
+
     it('continues sending later alerts when an SMTP send fails', async () => {
         const sent: SmtpMessage[] = [];
         const errors: unknown[] = [];
@@ -249,6 +367,7 @@ describe('mailNotification', () => {
         const result = await mailNotification({
             alerts: [bruteForceAlert, serverErrorAlert],
             smtp: smtpConfig,
+            userClient: createElasticUserClient(),
             logger: {
                 warn() {},
                 error(details: unknown) {
@@ -266,7 +385,7 @@ describe('mailNotification', () => {
 
         assert.deepEqual(result, {
             sent: false,
-            recipients: ['superuser@gdgoc.net', 'shop-owner@gdgoc.net', 'api-owner@gdgoc.net']
+            recipients: ['shop-owner@gdgoc.net', 'superuser@gdgoc.net', 'api-owner@gdgoc.net']
         });
         assert.equal(attempts, 2);
         assert.equal(sent.length, 1);
@@ -295,7 +414,7 @@ describe('mailNotification', () => {
 
         assert.deepEqual(result, {
             sent: false,
-            recipients: ['superuser@gdgoc.net', 'shop-owner@gdgoc.net']
+            recipients: []
         });
         assert.equal(warnings.length, 1);
     });

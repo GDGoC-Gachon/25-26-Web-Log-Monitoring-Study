@@ -39,6 +39,7 @@ export type DetectionAlert = {
     }>;
     clientIp?: string;
     path?: string;
+    paths?: string[];
     count?: number;
     threshold?: number;
     windowMinutes?: number;
@@ -46,17 +47,6 @@ export type DetectionAlert = {
     errorCount?: number;
     errorRatePercent?: number;
 };
-
-export type DetectionRecipient =
-    | {
-        email: string;
-        scope: 'all';
-    }
-    | {
-        email: string;
-        scope: 'domains';
-        domains: string[];
-    };
 
 export type SmtpMessage = {
     host: string;

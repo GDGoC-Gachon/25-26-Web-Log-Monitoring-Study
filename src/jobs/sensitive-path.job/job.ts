@@ -10,7 +10,9 @@ export interface SensitivePathDetectionResult extends DetectionAlert {
     type: 'SENSITIVE_PATH';
     clientIp: string;
     path: string;
+    paths: string[];
     matchedPath: string;
+    matchedPaths: string[];
     count: number;
     windowMinutes: number;
     reason: string;
@@ -24,8 +26,8 @@ type SensitivePathDetectionConfig = {
 type SensitivePathGroup = {
     clientIp: string;
     domain?: string | undefined;
-    path: string;
-    matchedPath: string;
+    paths: Set<string>;
+    matchedPaths: Set<string>;
     count: number;
 };
 
@@ -114,30 +116,44 @@ export function detectSensitivePathAccesses(
             continue;
         }
 
-        const groupKey = `${log.clientIp}\u0000${log.domain}\u0000${path}\u0000${matchedPath}`;
+        const groupKey = `${log.clientIp}\u0000${log.domain}`;
         const group = groups.get(groupKey) ?? {
             clientIp: log.clientIp,
             domain: log.domain || undefined,
-            path,
-            matchedPath,
+            paths: new Set<string>(),
+            matchedPaths: new Set<string>(),
             count: 0
         };
 
+        group.paths.add(path);
+        group.matchedPaths.add(matchedPath);
         group.count += 1;
         groups.set(groupKey, group);
     }
 
     return Array.from(groups.values())
-        .sort((left, right) => right.count - left.count || left.path.localeCompare(right.path))
-        .map((group) => ({
-            type: 'SENSITIVE_PATH',
+        .map((group) => {
+            const paths = Array.from(group.paths).sort();
+            const matchedPaths = Array.from(group.matchedPaths).sort();
+
+            return {
+                group,
+                paths,
+                matchedPaths
+            };
+        })
+        .sort((left, right) => right.group.count - left.group.count || left.paths.join('\u0000').localeCompare(right.paths.join('\u0000')))
+        .map(({ group, paths, matchedPaths }) => ({
+            type: 'SENSITIVE_PATH' as const,
             clientIp: group.clientIp,
             ...(group.domain ? { domain: group.domain } : {}),
-            path: group.path,
-            matchedPath: group.matchedPath,
+            path: paths[0] ?? '/',
+            paths,
+            matchedPath: matchedPaths[0] ?? '/',
+            matchedPaths,
             count: group.count,
             windowMinutes: sensitivePathConfig.windowMinutes,
-            reason: `${group.clientIp} accessed sensitive path ${group.path} ${group.count} time(s) within ${sensitivePathConfig.windowMinutes} minutes`
+            reason: `${group.clientIp} accessed sensitive paths ${paths.join(', ')} ${group.count} time(s) within ${sensitivePathConfig.windowMinutes} minutes`
         }));
 }
 

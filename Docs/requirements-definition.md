@@ -22,10 +22,10 @@
 | DDoS 탐지 | `REQ-DDOS-001~008` | 1차 | 부분 구현 | P0 | [ddos.md](requirements/ddos.md) | `src/jobs/DDos.job/` |
 | 웹 서비스 오류 탐지 | `REQ-4XX-001~008` | 1차·1.1 | 부분 구현 | P0 | [web-error.md](requirements/web-error.md) | Job·공통 정책·자동 테스트 구현, 실서버 QA 필요 |
 | 서버 오류 탐지 | `REQ-5XX-001~008` | 1차·1.1 | 부분 구현 | P0 | [server-error.md](requirements/server-error.md) | Job·공통 정책·자동 테스트 구현, 실서버 QA 필요 |
-| 민감 경로 접근 탐지 | `REQ-PATH-001~005` | 1차 | 부분 구현 | P0 | [sensitive-path.md](requirements/sensitive-path.md) | `src/jobs/sensitive-path.job/` |
+| 민감 경로 접근 탐지 | `REQ-PATH-001~006` | 1차 | 부분 구현 | P0 | [sensitive-path.md](requirements/sensitive-path.md) | `src/jobs/sensitive-path.job/`, 자동 테스트 구현, 실서버 QA 필요 |
 | 메일 알림 | `REQ-MAIL-001~013` | 1차·1.1 | 부분 구현 | P0 | [mail-notification.md](requirements/mail-notification.md) | `src/jobs/mail-notification.job/` |
 | 알림 수명주기·부분 장애 | `REQ-ALERT-001~007` | 1.1 | 계획 | P0 | [alert-lifecycle.md](requirements/alert-lifecycle.md) | 미구현, QA 계획 있음 |
-| Elastic 유저 API | `REQ-EUSER-001~008` | 1.1 | 결정 대기 | P1 | [elastic-user-api.md](requirements/elastic-user-api.md) | 미구현, 후보 API 계약 검증 필요 |
+| Elastic 유저 API | `REQ-EUSER-001~008` | 1.1 | 부분 구현 | P1 | [elastic-user-api.md](requirements/elastic-user-api.md) | `GET /_security/user` 연동과 자동 테스트 구현, 운영 권한 QA 필요 |
 | 방화벽 대응 | `REQ-FW-001~009` | 2차 | 계획 | P1 | [firewall-response.md](requirements/firewall-response.md) | 미구현 |
 | SaaS 관제 웹 | `REQ-SAAS-001~010` | 2차 검토 | 검토 중 | P2 | [security-monitoring-saas.md](requirements/security-monitoring-saas.md) | 미구현 |
 

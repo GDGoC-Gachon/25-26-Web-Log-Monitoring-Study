@@ -14,32 +14,20 @@ const baseConfig = {
 };
 
 describe('detectSensitivePathAccesses', () => {
-    it('detects exact and descendant sensitive path access attempts', () => {
+    it('creates one three-path incident with the original request count', () => {
         const results = detectSensitivePathAccesses([
-            createLog({ path: '/.env' }),
-            createLog({ path: '/admin/settings?tab=users' }),
+            createLog({ domain: 'elastic.gdgoc.net', clientIp: '34.11.167.212', path: '/.env' }),
+            createLog({ domain: 'elastic.gdgoc.net', clientIp: '34.11.167.212', path: '/admin/.env' }),
+            createLog({ domain: 'elastic.gdgoc.net', clientIp: '34.11.167.212', path: '/admin/phpinfo.php' }),
             createLog({ path: '/public' })
         ], baseConfig);
 
-        assert.deepEqual(results.map((result) => ({
-            clientIp: result.clientIp,
-            path: result.path,
-            count: result.count,
-            matchedPath: result.matchedPath
-        })), [
-            {
-                clientIp: '203.0.113.10',
-                path: '/.env',
-                count: 1,
-                matchedPath: '/.env'
-            },
-            {
-                clientIp: '203.0.113.10',
-                path: '/admin/settings',
-                count: 1,
-                matchedPath: '/admin'
-            }
-        ]);
+        assert.equal(results.length, 1);
+        assert.equal(results[0]?.domain, 'elastic.gdgoc.net');
+        assert.equal(results[0]?.clientIp, '34.11.167.212');
+        assert.equal(results[0]?.count, 3);
+        assert.deepEqual(results[0]?.paths, ['/.env', '/admin/.env', '/admin/phpinfo.php']);
+        assert.deepEqual(results[0]?.matchedPaths, ['/.env', '/admin']);
     });
 
     it('groups repeated sensitive path attempts by client IP and request path', () => {
@@ -50,6 +38,24 @@ describe('detectSensitivePathAccesses', () => {
 
         assert.equal(results.length, 1);
         assert.equal(results[0]?.count, 2);
+        assert.deepEqual(results[0]?.paths, ['/admin']);
+    });
+
+    it('keeps incidents separate when either the domain or client IP differs', () => {
+        const results = detectSensitivePathAccesses([
+            createLog({ domain: 'elastic.gdgoc.net', clientIp: '34.11.167.212', path: '/.env' }),
+            createLog({ domain: 'admin.gdgoc.net', clientIp: '34.11.167.212', path: '/admin/.env' }),
+            createLog({ domain: 'elastic.gdgoc.net', clientIp: '34.11.167.213', path: '/admin/phpinfo.php' })
+        ], baseConfig);
+
+        assert.equal(results.length, 3);
+        assert.deepEqual(results
+            .map((result) => [result.domain, result.clientIp, result.paths] as const)
+            .sort(([leftDomain, leftIp], [rightDomain, rightIp]) => `${leftDomain}\u0000${leftIp}`.localeCompare(`${rightDomain}\u0000${rightIp}`)), [
+            ['admin.gdgoc.net', '34.11.167.212', ['/admin/.env']],
+            ['elastic.gdgoc.net', '34.11.167.212', ['/.env']],
+            ['elastic.gdgoc.net', '34.11.167.213', ['/admin/phpinfo.php']]
+        ]);
     });
 });
 
