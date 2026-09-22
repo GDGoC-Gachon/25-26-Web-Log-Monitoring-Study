@@ -7,6 +7,9 @@ import {
     formatSmtpData,
     mailNotification,
     resolveElasticRoleRecipients
+    parseDetectionRecipients,
+    resolveDetectionRecipientGroups,
+    resolveDetectionRecipients
 } from './job.ts';
 import type { DetectionAlert, SmtpMessage } from '../../types/detection.ts';
 import type { ElasticUserApiClient } from '../../utils/elastic-user.client.ts';
@@ -107,6 +110,13 @@ describe('resolveElasticRoleRecipients', () => {
 
         assert.deepEqual(recipients, {
             to: ['shop-owner@gdgoc.net', 'api-owner@gdgoc.net'],
+            bcc: ['superuser@gdgoc.net']
+        });
+    });
+
+    it('keeps superusers as BCC recipients while exposing only matching service users', () => {
+        assert.deepEqual(resolveDetectionRecipientGroups([bruteForceAlert], smtpConfig.recipients), {
+            to: ['shop-owner@gdgoc.net'],
             bcc: ['superuser@gdgoc.net']
         });
     });
@@ -243,6 +253,13 @@ describe('mailNotification', () => {
             recipients: ['shop-owner@gdgoc.net', 'superuser@gdgoc.net', 'api-owner@gdgoc.net']
         });
         assert.equal(sent.length, 5);
+        assert.deepEqual(sent.map((message) => ({ to: message.to, bcc: message.bcc })), [
+            { to: ['shop-owner@gdgoc.net'], bcc: ['superuser@gdgoc.net'] },
+            { to: ['shop-owner@gdgoc.net', 'api-owner@gdgoc.net'], bcc: ['superuser@gdgoc.net'] },
+            { to: ['api-owner@gdgoc.net'], bcc: ['superuser@gdgoc.net'] },
+            { to: ['shop-owner@gdgoc.net'], bcc: ['superuser@gdgoc.net'] },
+            { to: ['api-owner@gdgoc.net'], bcc: ['superuser@gdgoc.net'] }
+        ]);
         assert.deepEqual(sent.map((message) => message.subject), [
             '[GDGoc Gachon 보안관제] 무차별 대입 공격 탐지',
             '[GDGoc Gachon 보안관제] DDoS 공격 탐지',
@@ -446,5 +463,21 @@ describe('formatSmtpData', () => {
 
         assert.match(plainTextData, /Content-Type: text\/plain; charset=utf-8/);
         assert.doesNotMatch(plainTextData, /multipart\/alternative/);
+    });
+
+    it('does not disclose BCC recipients in message headers', () => {
+        const data = formatSmtpData({
+            host: 'smtp.gdgoc.net',
+            port: 587,
+            secure: false,
+            from: 'monitor@gdgoc.net',
+            to: ['shop-owner@gdgoc.net'],
+            bcc: ['superuser@gdgoc.net'],
+            subject: 'Detection alert',
+            text: 'Plain-text fallback'
+        });
+
+        assert.match(data, /To: shop-owner@gdgoc\.net/);
+        assert.doesNotMatch(data, /superuser@gdgoc\.net/);
     });
 });
