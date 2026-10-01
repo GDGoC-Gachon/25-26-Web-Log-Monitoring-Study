@@ -7,10 +7,8 @@ import {
     formatSmtpData,
     mailNotification,
     resolveElasticRoleRecipients
-    parseDetectionRecipients,
-    resolveDetectionRecipientGroups,
-    resolveDetectionRecipients
 } from './job.ts';
+import { detectSensitivePathAccesses } from '../sensitive-path.job/job.ts';
 import type { DetectionAlert, SmtpMessage } from '../../types/detection.ts';
 import type { ElasticUserApiClient } from '../../utils/elastic-user.client.ts';
 
@@ -115,7 +113,10 @@ describe('resolveElasticRoleRecipients', () => {
     });
 
     it('keeps superusers as BCC recipients while exposing only matching service users', () => {
-        assert.deepEqual(resolveDetectionRecipientGroups([bruteForceAlert], smtpConfig.recipients), {
+        assert.deepEqual(resolveElasticRoleRecipients(bruteForceAlert, [
+            { email: 'shop-owner@gdgoc.net', roles: ['shop.gdgoc.net'] },
+            { email: 'superuser@gdgoc.net', roles: ['superuser'] }
+        ]), {
             to: ['shop-owner@gdgoc.net'],
             bcc: ['superuser@gdgoc.net']
         });
@@ -293,18 +294,21 @@ describe('mailNotification', () => {
                 }
             }
         };
-        const alert: DetectionAlert = {
-            type: 'SENSITIVE_PATH',
-            domain: 'elastic.gdgoc.net',
-            clientIp: '34.11.167.212',
-            path: '/.env',
-            paths: ['/.env', '/admin/.env', '/admin/phpinfo.php'],
-            count: 3,
-            reason: 'Grouped sensitive path incident'
-        };
+        const alerts = detectSensitivePathAccesses(
+            ['/.env', '/admin/.env', '/admin/phpinfo.php'].map((path) => ({
+                timestamp: '2026-09-15T12:05:00Z',
+                domain: 'elastic.gdgoc.net',
+                clientIp: '34.11.167.212',
+                path,
+                protocolStatus: 404
+            })),
+            { windowMinutes: 5, sensitivePaths: ['/.env', '/admin'] }
+        );
+        assert.equal(alerts.length, 1);
+        assert.equal(alerts[0]?.count, 3);
 
         const result = await mailNotification({
-            alerts: [alert],
+            alerts,
             smtp: smtpConfig,
             userClient,
             logger: { warn() {} },
@@ -323,6 +327,9 @@ describe('mailNotification', () => {
         assert.deepEqual(sent[0]?.to, ['elastic-owner@gdgoc.net']);
         assert.deepEqual(sent[0]?.bcc, ['admin@gdgoc.net']);
         assert.match(sent[0]?.html ?? '', /\/.env, \/admin\/\.env, \/admin\/phpinfo\.php/);
+        assert.match(sent[0]?.html ?? '', /elastic\.gdgoc\.net/);
+        assert.match(sent[0]?.html ?? '', /34\.11\.167\.212/);
+        assert.match(sent[0]?.text ?? '', /count=3/);
         assert.doesNotMatch(formatSmtpData(sent[0]!), /^Bcc:/mi);
     });
 
